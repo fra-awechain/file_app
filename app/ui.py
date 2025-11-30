@@ -92,7 +92,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Python 圖片批次處理工具 (Pro UI)")
-        self.resize(1150, 900) # 稍微再加大一點高度
+        self.resize(1150, 900) 
         self.worker = None 
         self.settings = QSettings("MyCompany", "ImageToolApp")
         
@@ -267,18 +267,15 @@ class MainWindow(QMainWindow):
         log_layout.setContentsMargins(10, 10, 10, 10)
         log_layout.setSpacing(10)
         
-        # Log 文字框
         self.log_area = QTextEdit()
         self.log_area.setReadOnly(True)
         self.log_area.setPlaceholderText("等待執行指令...")
         
-        # 清除按鈕
         btn_clear = QPushButton("清除 Log")
         btn_clear.setObjectName("ClearLogBtn")
         btn_clear.setCursor(Qt.PointingHandCursor)
         btn_clear.clicked.connect(self.log_area.clear)
         
-        # 將按鈕靠上對齊
         log_layout.addWidget(self.log_area)
         log_layout.addWidget(btn_clear, 0, Qt.AlignTop)
 
@@ -287,7 +284,7 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.stack)   
         splitter.addWidget(log_widget) 
         
-        # 設定比例： 1:1 (加高 console)
+        # 設定比例： 1:1
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
 
@@ -377,7 +374,7 @@ class MainWindow(QMainWindow):
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
         
-        # 1. 捲動區域 (上方內容)
+        # 1. 捲動區域
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -391,7 +388,7 @@ class MainWindow(QMainWindow):
         scroll.setWidget(scroll_content)
         root_layout.addWidget(scroll)
         
-        # 2. 底部固定區域 (執行按鈕)
+        # 2. 底部固定區域
         bottom_area = QWidget()
         bottom_area.setObjectName("BottomArea") 
         bottom_layout = QVBoxLayout(bottom_area)
@@ -402,8 +399,29 @@ class MainWindow(QMainWindow):
         return page_root, content_layout, bottom_layout
 
     # --------------------------------------------------------
-    # 1. 圖片縮放頁面
+    # 執行邏輯 (修改點：增加路徑防呆)
     # --------------------------------------------------------
+
+    def run_worker(self, func, **kwargs):
+        # 檢查輸入路徑
+        if 'input_path' in kwargs and not kwargs['input_path']:
+            self.log("⚠️ 錯誤：請先選擇輸入路徑 (Input Path)")
+            return
+        
+        # 檢查輸出路徑 (如果 kwargs 中包含 output_path 鍵值，且值為空)
+        if 'output_path' in kwargs and not kwargs['output_path']:
+            self.log("⚠️ 錯誤：請先選擇輸出資料夾 (Output Path)")
+            return
+
+        self.log("⏳ 準備開始任務...")
+        self.worker = Worker(func, **kwargs)
+        self.worker.log_signal.connect(self.log)
+        self.worker.start()
+
+    # --------------------------------------------------------
+    # 各頁面 UI 與 功能綁定
+    # --------------------------------------------------------
+    
     def page_scaling_ui(self):
         w, content, bottom = self._create_page_structure()
 
@@ -556,17 +574,8 @@ class MainWindow(QMainWindow):
         return w
 
     # --------------------------------------------------------
-    # 執行邏輯
+    # 執行轉發
     # --------------------------------------------------------
-
-    def run_worker(self, func, **kwargs):
-        if 'input_path' in kwargs and not kwargs['input_path']:
-            self.log("⚠️ 錯誤：請先選擇輸入資料夾")
-            return
-        self.log("⏳ 準備開始任務...")
-        self.worker = Worker(func, **kwargs)
-        self.worker.log_signal.connect(self.log)
-        self.worker.start()
 
     def run_scaling(self):
         try:
