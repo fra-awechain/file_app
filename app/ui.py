@@ -29,19 +29,16 @@ class SidebarButton(QFrame):
         self.setCursor(Qt.PointingHandCursor)
         self.is_selected = False
         
-        # --- UI 調整重點 ---
-        # 設定最小高度為 80px，讓按鈕看起來更高、垂直空間更足 (Padding 效果)
+        # UI 調整: 高度 80px
         self.setMinimumHeight(80) 
 
         layout = QHBoxLayout(self)
-        # 邊距設為 0，確保左側藍色邊條能從頭連到尾，沒有縫隙
         layout.setContentsMargins(0, 0, 0, 0)
-        # 元件間距
         layout.setSpacing(15)
 
         # 左側藍色邊條
         self.indicator = QWidget()
-        self.indicator.setFixedWidth(6) # 稍微加寬，配合高度
+        self.indicator.setFixedWidth(6)
         self.indicator.setStyleSheet("background-color: transparent;") 
         
         # 🔥 圖示
@@ -95,7 +92,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Python 圖片批次處理工具 (Pro UI)")
-        self.resize(1150, 850)
+        self.resize(1150, 900) # 稍微再加大一點高度
         self.worker = None 
         self.settings = QSettings("MyCompany", "ImageToolApp")
         
@@ -163,16 +160,37 @@ class MainWindow(QMainWindow):
             QPushButton#ExecBtn:hover { background-color: #005a9e; }
             QPushButton#ExecBtn:pressed { background-color: #004578; }
 
-            /* 瀏覽按鈕 */
-            QPushButton#BrowseBtn {
+            /* 瀏覽按鈕 (資料夾) */
+            QPushButton#BrowseFolderBtn {
                 background-color: #666; 
                 color: white;
                 font-size: 14px; 
                 padding: 6px;
                 border-radius: 3px;
             }
+            /* 瀏覽按鈕 (檔案) */
+            QPushButton#BrowseFileBtn {
+                background-color: #009688; 
+                color: white;
+                font-size: 14px; 
+                padding: 6px;
+                border-radius: 3px;
+            }
+            
+            /* 清除 Log 按鈕 */
+            QPushButton#ClearLogBtn {
+                background-color: #888888;
+                color: white;
+                font-size: 13px;
+                padding: 5px 10px;
+                border-radius: 3px;
+                min-width: 70px;
+            }
+            QPushButton#ClearLogBtn:hover {
+                background-color: #666666;
+            }
 
-            /* --- 明顯的 Scrollbar 樣式 --- */
+            /* Scrollbar */
             QScrollBar:vertical {
                 border: none;
                 background: #e0e0e0;
@@ -235,7 +253,7 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right_frame)
         right_layout.setContentsMargins(0, 0, 0, 0)
         
-        # 1. StackedWidget
+        # 1. StackedWidget (參數設定區)
         self.stack = QStackedWidget()
         self.stack.addWidget(self.page_scaling_ui())
         self.stack.addWidget(self.page_convert_ui())
@@ -243,16 +261,34 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.page_rename_ui())
         self.stack.addWidget(self.page_multi_ui())
 
-        # 2. Log 區域
+        # 2. Log 區域容器 (含清除按鈕)
+        log_widget = QWidget()
+        log_layout = QHBoxLayout(log_widget)
+        log_layout.setContentsMargins(10, 10, 10, 10)
+        log_layout.setSpacing(10)
+        
+        # Log 文字框
         self.log_area = QTextEdit()
         self.log_area.setReadOnly(True)
         self.log_area.setPlaceholderText("等待執行指令...")
+        
+        # 清除按鈕
+        btn_clear = QPushButton("清除 Log")
+        btn_clear.setObjectName("ClearLogBtn")
+        btn_clear.setCursor(Qt.PointingHandCursor)
+        btn_clear.clicked.connect(self.log_area.clear)
+        
+        # 將按鈕靠上對齊
+        log_layout.addWidget(self.log_area)
+        log_layout.addWidget(btn_clear, 0, Qt.AlignTop)
 
         # 3. Splitter
         splitter = QSplitter(Qt.Vertical)
         splitter.addWidget(self.stack)   
-        splitter.addWidget(self.log_area) 
-        splitter.setStretchFactor(0, 2)
+        splitter.addWidget(log_widget) 
+        
+        # 設定比例： 1:1 (加高 console)
+        splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
 
         right_layout.addWidget(splitter)
@@ -284,27 +320,44 @@ class MainWindow(QMainWindow):
         if folder:
             line_edit.setText(folder)
 
+    def select_file(self, line_edit):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "選擇圖片檔案", "", 
+            "Images (*.png *.jpg *.jpeg *.bmp *.webp *.tiff *.heic);;All Files (*)"
+        )
+        if file_path:
+            line_edit.setText(file_path)
+
+    # 封裝 GroupBox + Path Input
     def create_path_group(self, need_output=True):
         group = QGroupBox("檔案路徑")
         layout = QFormLayout()
         layout.setSpacing(15)
         
+        # 輸入路徑
         edt_in = QLineEdit()
-        btn_in = QPushButton("瀏覽...")
-        btn_in.setObjectName("BrowseBtn")
-        btn_in.setFixedWidth(80)
-        btn_in.clicked.connect(lambda: self.select_folder(edt_in))
+        btn_folder = QPushButton("📁 資料夾")
+        btn_folder.setObjectName("BrowseFolderBtn")
+        btn_folder.setFixedWidth(80)
+        btn_folder.clicked.connect(lambda: self.select_folder(edt_in))
+
+        btn_file = QPushButton("📄 檔案")
+        btn_file.setObjectName("BrowseFileBtn")
+        btn_file.setFixedWidth(80)
+        btn_file.clicked.connect(lambda: self.select_file(edt_in))
         
         row_in = QHBoxLayout()
         row_in.addWidget(edt_in)
-        row_in.addWidget(btn_in)
-        layout.addRow(SelectableLabel("輸入資料夾:"), row_in)
+        row_in.addWidget(btn_folder)
+        row_in.addWidget(btn_file)
+        layout.addRow(SelectableLabel("輸入路徑:"), row_in)
 
+        # 輸出路徑
         edt_out = None
         if need_output:
             edt_out = QLineEdit()
-            btn_out = QPushButton("瀏覽...")
-            btn_out.setObjectName("BrowseBtn")
+            btn_out = QPushButton("📂 資料夾")
+            btn_out.setObjectName("BrowseFolderBtn")
             btn_out.setFixedWidth(80)
             btn_out.clicked.connect(lambda: self.select_folder(edt_out))
             
