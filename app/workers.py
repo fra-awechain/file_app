@@ -1,8 +1,15 @@
 from PySide6.QtCore import QThread, Signal
 
 class Worker(QThread):
-    # 定義兩個信號：一個傳送文字 Log，一個通知任務完成
+    # log_signal: 文字 Log
+    # progress_signal: 總體進度 (0-100)
+    # current_file_signal: 當前處理的檔名 (str)
+    # file_progress_signal: 當前檔案的進度 (0-100)
+    # finished_signal: 任務完成
     log_signal = Signal(str)
+    progress_signal = Signal(int)
+    current_file_signal = Signal(str)
+    file_progress_signal = Signal(int)
     finished_signal = Signal()
 
     def __init__(self, task_func, **kwargs):
@@ -11,13 +18,14 @@ class Worker(QThread):
         self.kwargs = kwargs
 
     def run(self):
-        """
-        QThread 的入口點。
-        """
         try:
-            # 這裡我們將 self.log_signal.emit 傳遞給 logic 函式
-            # 這樣 logic 函式就可以透過這個 callback 發送 log 到 UI
-            self.task_func(self.log_signal.emit, **self.kwargs)
+            self.task_func(
+                log_callback=self.log_signal.emit, 
+                progress_callback=self.progress_signal.emit,
+                current_file_callback=self.current_file_signal.emit,
+                file_progress_callback=self.file_progress_signal.emit,
+                **self.kwargs
+            )
         except Exception as e:
             self.log_signal.emit(f"❌ 執行緒發生嚴重錯誤: {str(e)}")
         finally:

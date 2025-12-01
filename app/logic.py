@@ -1,30 +1,94 @@
 import os
+import subprocess
+import json
+import re
 from pathlib import Path
-from PIL import Image, ImageEnhance, ImageFilter # 新增 ImageEnhance
-from app.utils import get_files
+from PIL import Image, ImageEnhance
+from app.utils import get_files, is_ffmpeg_installed, get_video_duration
 
-# 定義一個簡單的 Log 介面
 def default_logger(msg):
     print(msg)
 
 # -----------------------------------------------------------------------------
-# 任務 1: 圖片縮放 (Scaling) + 增強
+# Helper: 取得媒體資訊
 # -----------------------------------------------------------------------------
-def task_scaling(log_callback, input_path, output_path, scale_ratio, recursive, 
-                 convert_jpg, lower_ext, delete_original, prefix, postfix, 
-                 crop_doubao, sharpen_factor, brightness_factor, author):
+def get_media_info(file_path):
+    path = Path(file_path)
+    ext = path.suffix.lower()
+    info_str = f"檔案: {path.name}\n"
     
-    log_callback(f"🚀 [Scaling] 開始執行 (比例: {scale_ratio})")
-    files = get_files(input_path, recursive)
-    log_callback(f"📂 找到 {len(files)} 個檔案")
+    try:
+        if ext in ['.jpg', '.jpeg', '.png', '.webp', '.tiff', '.bmp']:
+            with Image.open(path) as img:
+                info_str += f"格式: {img.format}\n尺寸: {img.size} (WxH)\n模式: {img.mode}\n"
+                exif = img._getexif()
+                if exif:
+                    info_str += "\n[EXIF 資訊]\n"
+                    for tag_id, value in exif.items():
+                        if tag_id == 315: info_str += f"Artist: {value}\n"
+                        elif tag_id == 270: info_str += f"Description: {value}\n"
+                        elif tag_id == 36867: info_str += f"DateTaken: {value}\n"
+                if img.info:
+                    info_str += "\n[Info Dictionary]\n"
+                    for k, v in img.info.items():
+                        if isinstance(v, (str, int, float)):
+                            info_str += f"{k}: {v}\n"
+
+        elif ext in ['.mp4', '.mov', '.avi', '.mkv']:
+            if not is_ffmpeg_installed():
+                return info_str + "\n(請安裝 FFmpeg 以查看影片詳細資訊)"
+            
+            cmd = [
+                "ffprobe", "-v", "quiet", "-print_format", "json",
+                "-show_format", "-show_streams", str(path)
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8')
+            if result.returncode == 0:
+                data = json.loads(result.stdout)
+                fmt = data.get('format', {})
+                tags = fmt.get('tags', {})
+                
+                info_str += f"時長: {fmt.get('duration', 'N/A')} 秒\n"
+                info_str += f"Bitrate: {fmt.get('bit_rate', 'N/A')}\n"
+                info_str += "\n[Metadata Tags]\n"
+                for k, v in tags.items():
+                    info_str += f"{k}: {v}\n"
+                for stream in data.get('streams', []):
+                    if stream.get('codec_type') == 'video':
+                        info_str += f"\n[Video Stream]\nCodec: {stream.get('codec_name')}\n解析度: {stream.get('width')}x{stream.get('height')}\n"
+            else:
+                info_str += f"\n讀取失敗: {result.stderr}"
+
+    except Exception as e:
+        info_str += f"\n發生錯誤: {str(e)}"
+        
+    return info_str
+
+# -----------------------------------------------------------------------------
+# 任務 1: 圖片處理 (Scaling + Meta + Enhance)
+# -----------------------------------------------------------------------------
+def task_scaling(log_callback, progress_callback, current_file_callback, file_progress_callback,
+                 input_path, output_path, mode, mode_value_1, mode_value_2,
+                 recursive, convert_jpg, lower_ext, delete_original, 
+                 prefix, postfix, crop_doubao, sharpen_factor, brightness_factor, 
+                 remove_metadata, author, description):
+    
+    log_callback(f"🚀 [Image Process] 開始 (模式: {mode})")
+    files = get_files(input_path, recursive, file_types='image')
+    total = len(files)
+    log_callback(f"📂 找到 {total} 張圖片")
 
     out_dir_base = Path(output_path)
     if not out_dir_base.exists():
         out_dir_base.mkdir(parents=True, exist_ok=True)
 
-    for file_path in files:
+    for i, file_path in enumerate(files):
         try:
-            # 計算相對路徑與輸出資料夾
+            pct = int(((i) / total) * 100)
+            progress_callback(pct)
+            current_file_callback(file_path.name)
+            file_progress_callback(0)
+
             if Path(input_path).is_dir():
                 rel_path = file_path.relative_to(Path(input_path))
             else:
@@ -33,7 +97,6 @@ def task_scaling(log_callback, input_path, output_path, scale_ratio, recursive,
             dest_folder = out_dir_base / rel_path.parent
             dest_folder.mkdir(parents=True, exist_ok=True)
 
-            # 檔名處理
             stem = file_path.stem
             new_stem = f"{prefix}{stem}{postfix}"
             original_ext = file_path.suffix
@@ -43,18 +106,25 @@ def task_scaling(log_callback, input_path, output_path, scale_ratio, recursive,
 
             output_file = dest_folder / f"{new_stem}{final_ext}"
 
-            # --- Pillow 圖片處理 ---
             with Image.open(file_path) as img:
-                # 轉檔前置處理
+                # 1. 移除 Meta (如果勾選)
+                if remove_metadata:
+                    # 清除 info 字典 (Pillow 儲存時會參考這裡)
+                    img.info.clear() 
+                    # 注意：對於 JPEG EXIF，Pillow save 時如果不傳 exif 參數通常就不會寫入
+                    # 但為了保險，我們在記憶體中就不保留它
+
+                # 2. 轉檔前置
                 if final_ext.lower() in ['.jpg', '.jpeg']:
-                    if img.mode in ('RGBA', 'LA'):
+                    if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+                        img = img.convert('RGBA')
                         background = Image.new('RGB', img.size, (255, 255, 255))
                         background.paste(img, mask=img.split()[-1])
                         img = background
                     elif img.mode != 'RGB':
                         img = img.convert('RGB')
 
-                # 豆包圖裁切
+                # 3. 裁切
                 if crop_doubao:
                     w, h = img.size
                     safe_w, safe_h = w - 320, h - 110
@@ -62,141 +132,325 @@ def task_scaling(log_callback, input_path, output_path, scale_ratio, recursive,
                         ratio = w / h
                         h_wide = int(safe_w / ratio)
                         w_high = int(safe_h * ratio)
-                        
-                        crop_w, crop_h = w, h
-                        if h_wide <= safe_h:
-                            crop_w, crop_h = safe_w, h_wide
-                        elif w_high <= safe_w:
-                            crop_w, crop_h = w_high, safe_h
-                            
+                        crop_w, crop_h = (safe_w, h_wide) if h_wide <= safe_h else (w_high, safe_h)
                         img = img.crop((0, 0, crop_w, crop_h))
-                        log_callback(f"✂️ 裁切: {file_path.name}")
+                        log_callback(f"✂️ [{i+1}/{total}] 裁切: {file_path.name}")
 
-                # 縮放
-                if scale_ratio != 1.0:
-                    new_w = int(img.width * scale_ratio)
-                    new_h = int(img.height * scale_ratio)
+                # 4. 縮放
+                w, h = img.size
+                new_w, new_h = w, h
+                should_resize = False
+
+                if mode == 'ratio':
+                    ratio = mode_value_1
+                    if ratio != 1.0:
+                        new_w = int(w * ratio); new_h = int(h * ratio); should_resize = True
+                elif mode == 'width':
+                    max_w = int(mode_value_1)
+                    if w > max_w:
+                        ratio = max_w / w; new_w = max_w; new_h = int(h * ratio); should_resize = True
+                elif mode == 'height':
+                    max_h = int(mode_value_1)
+                    if h > max_h:
+                        ratio = max_h / h; new_h = max_h; new_w = int(w * ratio); should_resize = True
+                elif mode == 'both':
+                    max_w = int(mode_value_1); max_h = int(mode_value_2)
+                    if w > max_w or h > max_h:
+                        ratio = min(max_w / w, max_h / h); new_w = int(w * ratio); new_h = int(h * ratio); should_resize = True
+
+                if should_resize:
                     img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                    log_callback(f"📏 [{i+1}/{total}] 縮放: {w}x{h} -> {new_w}x{new_h}")
+                else:
+                    log_callback(f"➡️ [{i+1}/{total}] 處理: {file_path.name}")
 
-                # --- 影像增強 ---
-                # 1. 銳利度 (ImageEnhance)
-                # 1.0 = 原始, 0.0 = 模糊, 2.0 = 銳利
+                # 5. 影像增強
                 if sharpen_factor != 1.0:
-                    enhancer = ImageEnhance.Sharpness(img)
-                    img = enhancer.enhance(sharpen_factor)
-                    
-                # 2. 亮度
-                # 1.0 = 原始, 0.0 = 全黑
+                    img = ImageEnhance.Sharpness(img).enhance(sharpen_factor)
                 if brightness_factor != 1.0:
-                    enhancer = ImageEnhance.Brightness(img)
-                    img = enhancer.enhance(brightness_factor)
+                    img = ImageEnhance.Brightness(img).enhance(brightness_factor)
 
-                # Metadata: Pillow save 不易直接寫入 EXIF Artist，但可保留部分原始 info
-                # 若需寫入 EXIF 需要更底層操作 (piexif)，此處暫保留原始 save 行為
-                
-                save_kwargs = {"quality": 95} if final_ext.lower() in ['.jpg', '.jpeg'] else {}
+                # 6. 儲存與寫入新 Meta
+                save_kwargs = {}
+                if final_ext.lower() in ['.jpg', '.jpeg']:
+                    save_kwargs["quality"] = 95
+                    # 若要寫入 EXIF (Artist/Desc) 到 JPG，需要 piexif 或建構 exif bytes，
+                    # Pillow 原生支援有限，此處示範保留架構。
+                elif final_ext.lower() == '.png':
+                    from PIL.PngImagePlugin import PngInfo
+                    metadata = PngInfo()
+                    if author: metadata.add_text("Artist", author)
+                    if description: metadata.add_text("Description", description)
+                    save_kwargs["pnginfo"] = metadata
+
                 img.save(output_file, **save_kwargs)
-                log_callback(f"✅ 完成: {output_file.name}")
 
-            # 刪除原始檔
             if delete_original and convert_jpg and original_ext.lower() not in ['.jpg', '.jpeg']:
                 os.remove(file_path)
-                log_callback(f"🗑️ 刪除原始檔: {file_path.name}")
+                log_callback(f"    🗑️ 刪除原始檔")
+            
+            file_progress_callback(100)
 
         except Exception as e:
             log_callback(f"❌ 失敗 {file_path.name}: {str(e)}")
 
-    log_callback("🏁 Scaling 任務結束")
+    progress_callback(100)
+    current_file_callback("全部完成")
+    file_progress_callback(100)
+    log_callback("🏁 圖片處理結束")
 
-# 其他任務保持不變，為節省篇幅省略 (task_convert_jpg, task_resize_1920...) 
-# 請保留原檔 logic.py 中其他的函式，或者如果需要我再貼一次完整版 logic.py
-# (為了確保你複製方便，下面我把其他的函式也補上)
+# -----------------------------------------------------------------------------
+# 任務 2: 影片銳利化 (含解析度適應、Meta移除)
+# -----------------------------------------------------------------------------
+def task_video_sharpen(log_callback, progress_callback, current_file_callback, file_progress_callback,
+                       input_path, output_path, recursive, 
+                       lower_ext, delete_original, prefix, postfix,
+                       luma_m_size, luma_amount, 
+                       scale_mode, scale_value, # scale_mode: 'ratio', 'hd1080', 'hd720', 'hd480'
+                       convert_h264, remove_metadata, author, description):
+    
+    if not is_ffmpeg_installed():
+        log_callback("❌ 錯誤：找不到 FFmpeg")
+        return
 
-def task_convert_jpg(log_callback, input_path, recursive, delete_original):
-    log_callback("🚀 [Convert] 開始執行")
-    files = get_files(input_path, recursive)
-    for file_path in files:
-        if file_path.suffix.lower() in ['.jpg', '.jpeg']: continue
-        try:
-            output_file = file_path.with_suffix('.jpg')
-            with Image.open(file_path) as img:
-                rgb_im = img.convert('RGB')
-                rgb_im.save(output_file, quality=90)
-                log_callback(f"✅ 轉換: {file_path.name} -> .jpg")
-            if delete_original:
-                os.remove(file_path)
-        except Exception as e:
-            log_callback(f"❌ 錯誤 {file_path.name}: {e}")
-    log_callback("🏁 轉換結束")
+    log_callback(f"🚀 [Video Sharpen] 開始")
+    files = get_files(input_path, recursive, file_types='video')
+    total_count = len(files)
+    
+    if total_count == 0:
+        log_callback("⚠️ 未找到任何影片檔")
+        return
 
-def task_resize_1920(log_callback, input_path, output_path, recursive):
-    log_callback("🚀 [Resize 1920] 開始執行")
-    files = get_files(input_path, recursive)
+    log_callback(f"📂 找到 {total_count} 個影片檔，正在計算總時長...")
+    
+    total_batch_duration = 0.0
+    file_durations = {}
+    for f in files:
+        dur = get_video_duration(f)
+        if dur <= 0: dur = 1.0
+        file_durations[str(f)] = dur
+        total_batch_duration += dur
+        
+    log_callback(f"⏱️ 任務總時長: {total_batch_duration:.2f} 秒")
+
     out_dir_base = Path(output_path)
-    for file_path in files:
-        try:
-            processed = False
-            with Image.open(file_path) as img:
-                w, h = img.size
-                if w > 1920 or h > 1920:
-                    aspect_ratio = w / h
-                    if w >= h: new_w, new_h = 1920, int(1920 / aspect_ratio)
-                    else: new_w, new_h = int(1920 * aspect_ratio), 1920
-                    img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-                    processed = True
-                
-                if Path(input_path).is_dir(): rel_path = file_path.relative_to(Path(input_path))
-                else: rel_path = Path(file_path.name)
-                dest = out_dir_base / rel_path
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                img.save(dest, quality=90)
-                msg = f"✅ 縮放: {new_w}x{new_h}" if processed else "ℹ️ 略過"
-                log_callback(f"{msg} : {rel_path}")
-        except Exception as e:
-            log_callback(f"❌ 錯誤 {file_path.name}: {e}")
-    log_callback("🏁 Resize 結束")
+    if not out_dir_base.exists():
+        out_dir_base.mkdir(parents=True, exist_ok=True)
 
-def task_rename(log_callback, input_path, prefix, postfix, recursive):
-    log_callback("🚀 [Rename] 開始執行")
-    files = get_files(input_path, recursive)
-    count = 0
-    for file_path in files:
+    time_pattern = re.compile(r"time=(\d{2}):(\d{2}):(\d{2}\.\d+)")
+    accumulated_duration = 0.0
+
+    for i, file_path in enumerate(files):
         try:
+            current_file_callback(file_path.name)
+            file_progress_callback(0)
+            
+            current_total_pct = int((accumulated_duration / total_batch_duration) * 100)
+            progress_callback(current_total_pct)
+            
+            log_callback(f"🎥 [{i+1}/{total_count}] 轉檔中: {file_path.name} ...")
+
+            if Path(input_path).is_dir():
+                rel_path = file_path.relative_to(Path(input_path))
+            else:
+                rel_path = Path(file_path.name)
+            dest_folder = out_dir_base / rel_path.parent
+            dest_folder.mkdir(parents=True, exist_ok=True)
+
             stem = file_path.stem
-            if (prefix and prefix in stem) and (postfix and postfix in stem): continue
-            new_name = f"{prefix}{stem}{postfix}{file_path.suffix.lower()}"
-            new_path = file_path.parent / new_name
-            if new_path != file_path:
-                file_path.rename(new_path)
-                log_callback(f"✏️ 更名: {file_path.name} -> {new_name}")
-                count += 1
+            new_stem = f"{prefix}{stem}{postfix}"
+            original_ext = file_path.suffix
+            
+            if convert_h264: final_ext = ".mp4"
+            else: final_ext = original_ext
+            if lower_ext: final_ext = final_ext.lower()
+
+            output_file = dest_folder / f"{new_stem}{final_ext}"
+
+            # --- FFmpeg Filters ---
+            filters = []
+            
+            # 1. 銳利化
+            if luma_amount > 0:
+                filters.append(f"unsharp=luma_msize_x={luma_m_size}:luma_msize_y={luma_m_size}:luma_amount={luma_amount}")
+            
+            # 2. 縮放邏輯
+            # 'if(lt(iw,ih),TARGET,-2)':'if(lt(iw,ih),-2,TARGET)'
+            # 意思：如果 寬<高 (直式)，則 寬=TARGET, 高=Auto(-2)
+            #       否則 (橫式/方)，則 寬=Auto(-2), 高=TARGET
+            if scale_mode == 'ratio':
+                if scale_value != 1.0:
+                    filters.append(f"scale=iw*{scale_value}:-2")
+            elif scale_mode in ['hd1080', 'hd720', 'hd480']:
+                target_px = 1080
+                if scale_mode == 'hd720': target_px = 720
+                elif scale_mode == 'hd480': target_px = 480
+                
+                scale_filter = f"scale='if(lt(iw,ih),{target_px},-2)':'if(lt(iw,ih),-2,{target_px})'"
+                filters.append(scale_filter)
+
+            filter_str = ",".join(filters)
+
+            cmd = ["ffmpeg", "-y", "-i", str(file_path)]
+            
+            # --- 編碼設定 ---
+            if filters or convert_h264 or final_ext != original_ext or remove_metadata or author or description:
+                cmd.extend(["-c:v", "libx264", "-crf", "23", "-preset", "medium"])
+                if filter_str: cmd.extend(["-vf", filter_str])
+            else:
+                cmd.extend(["-c:v", "copy"]) # 幾乎不會走到這，因為通常都會開銳利化
+            
+            cmd.extend(["-c:a", "copy"])
+
+            # --- Metadata 處理 ---
+            if remove_metadata:
+                # 移除全域與串流的 meta
+                cmd.extend(["-map_metadata", "-1"]) 
+            
+            # 寫入新 Meta
+            if author:
+                cmd.extend(["-metadata", f"artist={author}"])
+                cmd.extend(["-metadata", f"author={author}"])
+            if description:
+                cmd.extend(["-metadata", f"comment={description}"])
+                cmd.extend(["-metadata", f"description={description}"])
+
+            cmd.append(str(output_file))
+
+            # 執行
+            process = subprocess.Popen(cmd, stderr=subprocess.PIPE, universal_newlines=True)
+            current_file_duration = file_durations.get(str(file_path), 1.0)
+
+            for line in process.stderr:
+                match = time_pattern.search(line)
+                if match:
+                    h, m, s = map(float, match.groups())
+                    processed_sec = h * 3600 + m * 60 + s
+                    
+                    file_pct = int((processed_sec / current_file_duration) * 100)
+                    file_progress_callback(min(file_pct, 99))
+                    
+                    total_processed = accumulated_duration + processed_sec
+                    total_pct = int((total_processed / total_batch_duration) * 100)
+                    progress_callback(min(total_pct, 99))
+            
+            process.wait()
+
+            if process.returncode == 0:
+                file_progress_callback(100)
+                log_callback(f"    ✅ 完成")
+                if delete_original:
+                    os.remove(file_path)
+                    log_callback(f"    🗑️ 刪除原始檔")
+            else:
+                log_callback(f"    ❌ 失敗 (Code: {process.returncode})")
+
+            accumulated_duration += current_file_duration
+
+        except Exception as e:
+            log_callback(f"❌ 程式錯誤 {file_path.name}: {str(e)}")
+
+    progress_callback(100)
+    current_file_callback("全部完成")
+    file_progress_callback(100)
+    log_callback("🏁 影片處理結束")
+
+# -----------------------------------------------------------------------------
+# 任務 3: 修改檔名前後綴
+# -----------------------------------------------------------------------------
+def task_rename_replace(log_callback, progress_callback, current_file_callback, file_progress_callback,
+                        input_path, recursive, 
+                        do_prefix, old_prefix, new_prefix,
+                        do_suffix, old_suffix, new_suffix):
+    
+    log_callback("🚀 [Rename] 開始修改前後綴")
+    files = get_files(input_path, recursive, file_types='all')
+    total = len(files)
+    count = 0
+    
+    for i, file_path in enumerate(files):
+        pct = int(((i) / total) * 100)
+        progress_callback(pct)
+        current_file_callback(file_path.name)
+        file_progress_callback(50) 
+        
+        try:
+            parent = file_path.parent
+            stem = file_path.stem
+            suffix = file_path.suffix
+            new_stem = stem
+            
+            if do_prefix and old_prefix in new_stem:
+                if new_stem.startswith(old_prefix):
+                    new_stem = new_prefix + new_stem[len(old_prefix):]
+            
+            if do_suffix and old_suffix in new_stem:
+                if new_stem.endswith(old_suffix):
+                    new_stem = new_stem[:-len(old_suffix)] + new_suffix
+            
+            if new_stem != stem:
+                new_filename = f"{new_stem}{suffix}"
+                new_path = parent / new_filename
+                if not new_path.exists():
+                    file_path.rename(new_path)
+                    log_callback(f"✏️ [{i+1}/{total}] 更名: {file_path.name} -> {new_filename}")
+                    count += 1
+                else:
+                    log_callback(f"⚠️ [{i+1}/{total}] 跳過: {new_filename}")
+            file_progress_callback(100)
+            
         except Exception as e:
             log_callback(f"❌ 錯誤 {file_path.name}: {e}")
+            
+    progress_callback(100)
+    current_file_callback("全部完成")
+    file_progress_callback(100)
     log_callback(f"🏁 更名結束，共修改 {count} 個檔案")
 
-def task_multi_res(log_callback, input_path, output_path, recursive, lower_ext, orientation):
-    log_callback(f"🚀 [Multi-Res] 開始執行")
+# -----------------------------------------------------------------------------
+# 任務 4: 多尺寸生成
+# -----------------------------------------------------------------------------
+def task_multi_res(log_callback, progress_callback, current_file_callback, file_progress_callback,
+                   input_path, output_path, recursive, lower_ext, orientation):
+    log_callback(f"🚀 [Multi-Res] 開始生成多尺寸")
     target_sizes = [1024, 512, 256, 128, 64, 32]
-    files = get_files(input_path, recursive)
+    files = get_files(input_path, recursive, file_types='image')
+    total = len(files)
     out_dir_base = Path(output_path)
-    for file_path in files:
+    
+    for i, file_path in enumerate(files):
+        pct = int(((i) / total) * 100)
+        progress_callback(pct)
+        current_file_callback(file_path.name)
+        file_progress_callback(0)
+        
         try:
+            log_callback(f"[{i+1}/{total}] 生成多尺寸: {file_path.name}")
             with Image.open(file_path) as img:
                 w, h = img.size
                 ref_size = w if orientation == 'h' else h
+                
                 if Path(input_path).is_dir(): rel_path = file_path.relative_to(Path(input_path))
                 else: rel_path = Path(file_path.name)
+                
                 parent = (out_dir_base / rel_path).parent
                 parent.mkdir(parents=True, exist_ok=True)
+                
                 base = file_path.stem
                 ext = file_path.suffix.lower() if lower_ext else file_path.suffix
-                for size in target_sizes:
+                
+                for idx, size in enumerate(target_sizes):
                     if ref_size >= size:
                         if orientation == 'h': ratio = size / w; new_w, new_h = size, int(h * ratio)
                         else: ratio = size / h; new_w, new_h = int(w * ratio), size
                         resized_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
                         resized_img.save(parent / f"{base}-{size}{ext}", quality=90)
-                log_callback(f"✅ {file_path.name} 處理完成")
+                    file_prog = int(((idx + 1) / 6) * 100)
+                    file_progress_callback(file_prog)
         except Exception as e:
             log_callback(f"❌ 錯誤 {file_path.name}: {e}")
+            
+    progress_callback(100)
+    current_file_callback("全部完成")
+    file_progress_callback(100)
     log_callback("🏁 多尺寸任務結束")
