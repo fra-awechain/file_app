@@ -120,16 +120,14 @@ class MainWindow(QMainWindow):
                 font-size: 16px;
                 selection-background-color: #0078D7;
             }
-            /* 解決 Mac Dark Mode 下拉選單看不清楚的問題 */
             QComboBox QAbstractItemView {
-                background-color: #ffffff; /* 下拉清單背景白 */
-                color: #000000;            /* 選項文字黑 */
-                selection-background-color: #0078D7; /* 選中項目藍底 */
-                selection-color: #ffffff;            /* 選中項目白字 */
+                background-color: #ffffff;
+                color: #000000;
+                selection-background-color: #0078D7;
+                selection-color: #ffffff;
                 outline: none;
             }
             
-            /* --- 其他元件 --- */
             QCheckBox { spacing: 8px; font-size: 16px; color: #000000; }
             QCheckBox::indicator { width: 18px; height: 18px; }
             
@@ -380,9 +378,11 @@ class MainWindow(QMainWindow):
             line_edit.setText(folder)
 
     def select_file(self, line_edit):
+        # 修正：擴充支援的格式清單 (包含 jpeg, webp, heic, tiff 等)
+        filters = "Media (*.png *.jpg *.jpeg *.webp *.bmp *.tiff *.heic *.mp4 *.mov *.avi *.mkv *.webm *.flv);;Images (*.png *.jpg *.jpeg *.webp *.bmp *.tiff *.heic);;Videos (*.mp4 *.mov *.avi *.mkv *.webm *.flv);;All (*)"
         file_path, _ = QFileDialog.getOpenFileName(
             self, "選擇檔案", "", 
-            "Media (*.png *.jpg *.mp4 *.mov *.avi *.mkv);;All (*)"
+            filters
         )
         if file_path:
             line_edit.setText(file_path)
@@ -496,26 +496,24 @@ class MainWindow(QMainWindow):
         form.setSpacing(15)
         
         self.sc_mode = QComboBox()
-        self.sc_mode.addItems(["模式 1: 指定縮放比例 (Ratio)", "模式 2: 指定最大寬度 (Max Width)", "模式 3: 指定最大高度 (Max Height)", "模式 4: 指定最大寬度與高度 (Contain)"])
+        # 更新：移除模式 4，更新模式 2 與 3 的名稱
+        self.sc_mode.addItems(["模式 1: 指定縮放比例 (Ratio)", "模式 2: 指定寬度 (Target Width)", "模式 3: 指定高度 (Target Height)"])
         self.stack_modes = QStackedWidget()
         
+        # Mode 1: Ratio
         w_m1 = QWidget(); l1 = QHBoxLayout(w_m1); l1.setContentsMargins(0,0,0,0)
         self.sc_val_ratio = QLineEdit("1.0"); l1.addWidget(self.sc_val_ratio); l1.addWidget(SelectableLabel("(範圍 0.1~5.0)"))
         self.stack_modes.addWidget(w_m1)
         
+        # Mode 2: Width
         w_m2 = QWidget(); l2 = QHBoxLayout(w_m2); l2.setContentsMargins(0,0,0,0)
-        self.sc_val_width = QLineEdit("1920"); l2.addWidget(self.sc_val_width); l2.addWidget(SelectableLabel("px"))
+        self.sc_val_width = QLineEdit("1920"); l2.addWidget(self.sc_val_width); l2.addWidget(SelectableLabel("px (強制縮放至此寬度)"))
         self.stack_modes.addWidget(w_m2)
         
+        # Mode 3: Height
         w_m3 = QWidget(); l3 = QHBoxLayout(w_m3); l3.setContentsMargins(0,0,0,0)
-        self.sc_val_height = QLineEdit("1080"); l3.addWidget(self.sc_val_height); l3.addWidget(SelectableLabel("px"))
+        self.sc_val_height = QLineEdit("1080"); l3.addWidget(self.sc_val_height); l3.addWidget(SelectableLabel("px (強制縮放至此高度)"))
         self.stack_modes.addWidget(w_m3)
-        
-        w_m4 = QWidget(); l4 = QHBoxLayout(w_m4); l4.setContentsMargins(0,0,0,0)
-        self.sc_val_w_both = QLineEdit("1920"); self.sc_val_h_both = QLineEdit("1080")
-        l4.addWidget(SelectableLabel("W:")); l4.addWidget(self.sc_val_w_both)
-        l4.addWidget(SelectableLabel("H:")); l4.addWidget(self.sc_val_h_both)
-        self.stack_modes.addWidget(w_m4)
         
         self.sc_mode.currentIndexChanged.connect(self.stack_modes.setCurrentIndex)
         
@@ -537,7 +535,8 @@ class MainWindow(QMainWindow):
         form.addRow(SelectableLabel("圖片描述:"), row_desc)
         grp_opts.setLayout(form); content.addWidget(grp_opts)
         
-        self.sc_rec = QCheckBox("遞歸處理"); self.sc_rec.setChecked(self.settings.value("sc_rec", True, type=bool))
+        # 修正：將「遞歸處理」改為「含子資料夾」
+        self.sc_rec = QCheckBox("含子資料夾"); self.sc_rec.setChecked(self.settings.value("sc_rec", True, type=bool))
         self.sc_jpg = QCheckBox("強制轉 JPG"); self.sc_jpg.setChecked(self.settings.value("sc_jpg", True, type=bool))
         self.sc_low = QCheckBox("副檔名轉小寫"); self.sc_low.setChecked(self.settings.value("sc_low", True, type=bool))
         self.sc_del = QCheckBox("轉檔後刪除原始檔"); self.sc_del.setChecked(self.settings.value("sc_del", True, type=bool))
@@ -587,7 +586,8 @@ class MainWindow(QMainWindow):
         form.addRow(SelectableLabel("前綴:"), self.vd_prefix); form.addRow(SelectableLabel("後綴:"), self.vd_postfix)
         grp_opts.setLayout(form); content.addWidget(grp_opts)
         
-        self.vd_rec = QCheckBox("遞歸處理"); self.vd_rec.setChecked(self.settings.value("vd_rec", True, type=bool))
+        # 修正：將「遞歸處理」改為「含子資料夾」
+        self.vd_rec = QCheckBox("含子資料夾"); self.vd_rec.setChecked(self.settings.value("vd_rec", True, type=bool))
         self.vd_low = QCheckBox("副檔名轉小寫"); self.vd_low.setChecked(self.settings.value("vd_low", True, type=bool))
         self.vd_del = QCheckBox("刪除原始檔"); self.vd_del.setChecked(self.settings.value("vd_del", False, type=bool))
         self.vd_h264 = QCheckBox("強制轉 MP4 (H.264)"); self.vd_h264.setChecked(self.settings.value("vd_h264", True, type=bool))
@@ -631,13 +631,14 @@ class MainWindow(QMainWindow):
 
     # --- Run Methods ---
     def run_scaling(self):
-        mode = ['ratio', 'width', 'height', 'both'][self.sc_mode.currentIndex()]
+        # 更新：只剩下 mode 1(ratio), 2(width), 3(height)
+        mode = ['ratio', 'width', 'height'][self.sc_mode.currentIndex()]
         val1=0.0; val2=0.0
         try:
             if mode=='ratio': val1=float(self.sc_val_ratio.text())
             elif mode=='width': val1=int(self.sc_val_width.text())
             elif mode=='height': val1=int(self.sc_val_height.text())
-            elif mode=='both': val1=int(self.sc_val_w_both.text()); val2=int(self.sc_val_h_both.text())
+            # 移除了 both
             sharp=float(self.sc_sharpness.text()); bright=float(self.sc_brightness.text())
         except: self.log("❌ 參數錯誤"); return
         

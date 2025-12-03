@@ -109,10 +109,7 @@ def task_scaling(log_callback, progress_callback, current_file_callback, file_pr
             with Image.open(file_path) as img:
                 # 1. 移除 Meta (如果勾選)
                 if remove_metadata:
-                    # 清除 info 字典 (Pillow 儲存時會參考這裡)
                     img.info.clear() 
-                    # 注意：對於 JPEG EXIF，Pillow save 時如果不傳 exif 參數通常就不會寫入
-                    # 但為了保險，我們在記憶體中就不保留它
 
                 # 2. 轉檔前置
                 if final_ext.lower() in ['.jpg', '.jpeg']:
@@ -145,18 +142,24 @@ def task_scaling(log_callback, progress_callback, current_file_callback, file_pr
                     ratio = mode_value_1
                     if ratio != 1.0:
                         new_w = int(w * ratio); new_h = int(h * ratio); should_resize = True
+                
                 elif mode == 'width':
-                    max_w = int(mode_value_1)
-                    if w > max_w:
-                        ratio = max_w / w; new_w = max_w; new_h = int(h * ratio); should_resize = True
+                    # 強制指定寬度
+                    target_w = int(mode_value_1)
+                    if target_w > 0:
+                        ratio = target_w / w
+                        new_w = target_w
+                        new_h = int(h * ratio)
+                        should_resize = True
+                
                 elif mode == 'height':
-                    max_h = int(mode_value_1)
-                    if h > max_h:
-                        ratio = max_h / h; new_h = max_h; new_w = int(w * ratio); should_resize = True
-                elif mode == 'both':
-                    max_w = int(mode_value_1); max_h = int(mode_value_2)
-                    if w > max_w or h > max_h:
-                        ratio = min(max_w / w, max_h / h); new_w = int(w * ratio); new_h = int(h * ratio); should_resize = True
+                    # 強制指定高度
+                    target_h = int(mode_value_1)
+                    if target_h > 0:
+                        ratio = target_h / h
+                        new_h = target_h
+                        new_w = int(w * ratio)
+                        should_resize = True
 
                 if should_resize:
                     img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
@@ -174,8 +177,6 @@ def task_scaling(log_callback, progress_callback, current_file_callback, file_pr
                 save_kwargs = {}
                 if final_ext.lower() in ['.jpg', '.jpeg']:
                     save_kwargs["quality"] = 95
-                    # 若要寫入 EXIF (Artist/Desc) 到 JPG，需要 piexif 或建構 exif bytes，
-                    # Pillow 原生支援有限，此處示範保留架構。
                 elif final_ext.lower() == '.png':
                     from PIL.PngImagePlugin import PngInfo
                     metadata = PngInfo()
@@ -185,9 +186,14 @@ def task_scaling(log_callback, progress_callback, current_file_callback, file_pr
 
                 img.save(output_file, **save_kwargs)
 
-            if delete_original and convert_jpg and original_ext.lower() not in ['.jpg', '.jpeg']:
-                os.remove(file_path)
-                log_callback(f"    🗑️ 刪除原始檔")
+            # 修正後的刪除邏輯：只要勾選刪除且來源與目標不同，即刪除
+            if delete_original:
+                if file_path.absolute() != output_file.absolute():
+                    try:
+                        os.remove(file_path)
+                        log_callback(f"    🗑️ 刪除原始檔")
+                    except Exception as del_err:
+                        log_callback(f"    ⚠️ 刪除失敗: {str(del_err)}")
             
             file_progress_callback(100)
 
@@ -206,7 +212,7 @@ def task_video_sharpen(log_callback, progress_callback, current_file_callback, f
                        input_path, output_path, recursive, 
                        lower_ext, delete_original, prefix, postfix,
                        luma_m_size, luma_amount, 
-                       scale_mode, scale_value, # scale_mode: 'ratio', 'hd1080', 'hd720', 'hd480'
+                       scale_mode, scale_value, 
                        convert_h264, remove_metadata, author, description):
     
     if not is_ffmpeg_installed():
@@ -275,9 +281,6 @@ def task_video_sharpen(log_callback, progress_callback, current_file_callback, f
                 filters.append(f"unsharp=luma_msize_x={luma_m_size}:luma_msize_y={luma_m_size}:luma_amount={luma_amount}")
             
             # 2. 縮放邏輯
-            # 'if(lt(iw,ih),TARGET,-2)':'if(lt(iw,ih),-2,TARGET)'
-            # 意思：如果 寬<高 (直式)，則 寬=TARGET, 高=Auto(-2)
-            #       否則 (橫式/方)，則 寬=Auto(-2), 高=TARGET
             if scale_mode == 'ratio':
                 if scale_value != 1.0:
                     filters.append(f"scale=iw*{scale_value}:-2")
@@ -298,16 +301,14 @@ def task_video_sharpen(log_callback, progress_callback, current_file_callback, f
                 cmd.extend(["-c:v", "libx264", "-crf", "23", "-preset", "medium"])
                 if filter_str: cmd.extend(["-vf", filter_str])
             else:
-                cmd.extend(["-c:v", "copy"]) # 幾乎不會走到這，因為通常都會開銳利化
+                cmd.extend(["-c:v", "copy"]) 
             
             cmd.extend(["-c:a", "copy"])
 
             # --- Metadata 處理 ---
             if remove_metadata:
-                # 移除全域與串流的 meta
                 cmd.extend(["-map_metadata", "-1"]) 
             
-            # 寫入新 Meta
             if author:
                 cmd.extend(["-metadata", f"artist={author}"])
                 cmd.extend(["-metadata", f"author={author}"])
@@ -340,8 +341,11 @@ def task_video_sharpen(log_callback, progress_callback, current_file_callback, f
                 file_progress_callback(100)
                 log_callback(f"    ✅ 完成")
                 if delete_original:
-                    os.remove(file_path)
-                    log_callback(f"    🗑️ 刪除原始檔")
+                    if file_path.absolute() != output_file.absolute():
+                        try:
+                            os.remove(file_path)
+                            log_callback(f"    🗑️ 刪除原始檔")
+                        except: pass
             else:
                 log_callback(f"    ❌ 失敗 (Code: {process.returncode})")
 
