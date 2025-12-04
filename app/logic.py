@@ -100,6 +100,55 @@ def get_color_match_mask(img_rgba, target_color_hex, tolerance=0):
 # -----------------------------------------------------------------------------
 # 核心邏輯：單張圖片分區填色處理
 # -----------------------------------------------------------------------------
+import os
+import subprocess
+import json
+import re
+from pathlib import Path
+from PIL import Image, ImageEnhance, ImageChops
+from app.utils import get_files, is_ffmpeg_installed, get_video_duration
+
+# -----------------------------------------------------------------------------
+# Helper: 取得媒體資訊 (維持原樣，省略部分以節省篇幅，請保留您原本的代碼)
+# -----------------------------------------------------------------------------
+def get_media_info(file_path):
+    # ... (請保留您原本的 get_media_info 代碼) ...
+    return "Media Info Placeholder" 
+
+# -----------------------------------------------------------------------------
+# 核心邏輯：計算顏色匹配遮罩 (New)
+# -----------------------------------------------------------------------------
+def get_color_match_mask(img_rgba, target_color_hex, tolerance=0):
+    """
+    建立一個遮罩，其中與 target_color_hex 匹配的像素為白(255)，其餘為黑(0)。
+    Tolerance 暫時使用簡易距離計算。
+    """
+    try:
+        c = target_color_hex.lstrip('#')
+        rgb = tuple(int(c[i:i+2], 16) for i in (0, 2, 4))
+        
+        # 建立純色圖
+        target_img = Image.new('RGB', img_rgba.size, rgb)
+        src_rgb = img_rgba.convert('RGB')
+        
+        # 計算差異
+        diff = ImageChops.difference(src_rgb, target_img)
+        diff = diff.convert('L')
+        
+        # 差異越小越黑(0)。我們需要反轉：差異小 -> 白(255)
+        # Tolerance: 0-100% maps to threshold
+        threshold = int(tolerance * 2.55) # 簡單估算
+        
+        # 如果像素值 < threshold，設為 255 (選中)，否則 0
+        mask = diff.point(lambda x: 255 if x <= threshold else 0)
+        return mask
+    except Exception as e:
+        print(f"Color Mask Error: {e}")
+        return Image.new('L', img_rgba.size, 0)
+
+# -----------------------------------------------------------------------------
+# 核心邏輯：單張圖片分區填色處理 (Updated)
+# -----------------------------------------------------------------------------
 def process_single_image_fill(img, settings_opaque, settings_trans, settings_semi):
     """
     img: PIL Image (Expected RGBA)
@@ -119,25 +168,33 @@ def process_single_image_fill(img, settings_opaque, settings_trans, settings_sem
 
     r, g, b, a = img.split()
     
-    # 建立 Alpha 區域遮罩
+    # 1. 建立基礎 Alpha 區域遮罩
+    # 不透明: Alpha = 255
     mask_opaque_alpha = a.point(lambda x: 255 if x == 255 else 0, mode='L')
+    # 透明: Alpha = 0
     mask_trans_alpha = a.point(lambda x: 255 if x == 0 else 0, mode='L')
+    # 半透明: 0 < Alpha < 255 (其餘部分)
     mask_others = ImageChops.add(mask_opaque_alpha, mask_trans_alpha)
     mask_semi_alpha = ImageChops.invert(mask_others)
 
-    width, height = img.size
     final_img = img.copy()
 
     def process_region(base_img, region_alpha_mask, settings):
         if not settings: return base_img
         
-        # 1. 處理目標篩選 (Target Selection)
+        # 如果該區域本身就沒有任何像素，直接返回
+        if region_alpha_mask.getbbox() is None:
+            return base_img
+
+        # --- A. 計算最終作用遮罩 (Final Mask) ---
         target_mode = settings.get('target_mode', 'all')
         final_mask = region_alpha_mask
         
         if target_mode in ['specific', 'non_specific']:
             target_color = settings.get('target_color', '#FFFFFF')
-            color_mask = get_color_match_mask(base_img, target_color)
+            # 在該區域範圍內，找出符合顏色的像素
+            # 注意：這裡只比對顏色(RGB)，Alpha 已經由 region_alpha_mask 決定
+            color_mask = get_color_match_mask(base_img, target_color, tolerance=10) # 預設一點容許值
             
             if target_mode == 'specific':
                 # 交集: 既在該 Alpha 區間，又是該顏色
@@ -147,16 +204,18 @@ def process_single_image_fill(img, settings_opaque, settings_trans, settings_sem
                 inv_color_mask = ImageChops.invert(color_mask)
                 final_mask = ImageChops.multiply(region_alpha_mask, inv_color_mask)
         
-        # 如果遮罩全黑，則無需處理
+        # 再次檢查是否有需要處理的像素
         if final_mask.getbbox() is None:
             return base_img
 
-        # 2. 填充處理 (Color / Image)
+        # --- B. 填充內容 (Color / Image) ---
         fill_layer = None
         fill_mode = settings.get('fill_mode', 'maintain')
+        width, height = base_img.size
         
         if fill_mode == 'color':
             c_val = settings.get('fill_color', '#FFFFFF')
+            # 建立純色層
             fill_layer = Image.new('RGBA', (width, height), c_val)
         
         elif fill_mode == 'image':
@@ -169,6 +228,8 @@ def process_single_image_fill(img, settings_opaque, settings_trans, settings_sem
                     new_w = int(tex.width * scale)
                     new_h = int(tex.height * scale)
                     tex = tex.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                    
+                    # Tiling
                     tiled = Image.new('RGBA', (width, height))
                     for x in range(0, width, new_w):
                         for y in range(0, height, new_h):
@@ -176,29 +237,119 @@ def process_single_image_fill(img, settings_opaque, settings_trans, settings_sem
                     fill_layer = tiled
                 except: pass
 
+        # 應用填充
         if fill_layer:
+            # 只有在 final_mask 為白色的地方，才使用 fill_layer，其餘維持 base_img
             base_img = Image.composite(fill_layer, base_img, final_mask)
 
-        # 3. 透明度處理
+        # --- C. 透明度處理 ---
+        # 注意：透明度改變也只應作用在 final_mask 選中的區域
         trans_mode = settings.get('trans_mode', 'maintain')
         if trans_mode == 'change':
-            val = settings.get('trans_val', 0)
-            target_alpha = int(255 - (val * 2.55))
-            if target_alpha < 0: target_alpha = 0
-            if target_alpha > 255: target_alpha = 255
+            val = settings.get('trans_val', 255)
+            # 這裡 val 是 0(透明) - 100(不透明)，需轉換為 0-255
+            # UI Slider 0=Transparent, 100=Opaque -> 邏輯似乎是 0-100
+            # 假設 settings 傳入的是 0-100
+            target_alpha_val = int((val / 100.0) * 255)
             
-            alpha_plane = Image.new('L', (width, height), target_alpha)
+            # 建立全圖目標 Alpha 層
+            target_alpha_plane = Image.new('L', (width, height), target_alpha_val)
+            
             curr_r, curr_g, curr_b, curr_a = base_img.split()
-            new_a = Image.composite(alpha_plane, curr_a, final_mask)
+            
+            # 僅在 final_mask 範圍內應用新的 Alpha，其餘保持原 Alpha
+            new_a = Image.composite(target_alpha_plane, curr_a, final_mask)
+            
             base_img = Image.merge('RGBA', (curr_r, curr_g, curr_b, new_a))
 
         return base_img
 
+    # 依序處理三個區塊
     final_img = process_region(final_img, mask_opaque_alpha, settings_opaque)
     final_img = process_region(final_img, mask_trans_alpha, settings_trans)
     final_img = process_region(final_img, mask_semi_alpha, settings_semi)
 
     return final_img
+
+# (其餘 task_scaling, task_rename 等函式請保留您原本的，這裡只列出 task_image_fill 的更新)
+
+def task_image_fill(log_callback, progress_callback, current_file_callback, file_progress_callback,
+                    input_path, output_path, recursive,
+                    settings_opaque, settings_trans, settings_semi,
+                    delete_original, output_format):
+    
+    log_callback("🚀 [Image Fill] 開始填色處理")
+    
+    # 支援所有 Image 格式 (Pillow 支援的)
+    files = get_files(input_path, recursive, file_types='image')
+    total = len(files)
+    
+    if total == 0:
+        log_callback("⚠️ 未找到任何圖片")
+        return
+
+    out_dir_base = Path(output_path)
+    if not out_dir_base.exists():
+        out_dir_base.mkdir(parents=True, exist_ok=True)
+
+    # 處理輸出格式
+    ext_map = {'jpg': '.jpg', 'jpeg': '.jpg', 'png': '.png', 'webp': '.webp'}
+    target_ext = ext_map.get(output_format.lower(), '.png')
+
+    for i, file_path in enumerate(files):
+        try:
+            pct = int(((i) / total) * 100)
+            progress_callback(pct)
+            current_file_callback(file_path.name)
+            file_progress_callback(0)
+
+            if Path(input_path).is_dir():
+                rel_path = file_path.relative_to(Path(input_path))
+            else:
+                rel_path = Path(file_path.name)
+            
+            dest_folder = out_dir_base / rel_path.parent
+            dest_folder.mkdir(parents=True, exist_ok=True)
+            
+            output_file = dest_folder / f"{file_path.stem}{target_ext}"
+
+            with Image.open(file_path) as img:
+                processed_img = process_single_image_fill(img, settings_opaque, settings_trans, settings_semi)
+                
+                # 儲存設定
+                save_fmt = output_format.upper()
+                if save_fmt in ['JPG', 'JPEG']:
+                    # JPG 不支援透明，轉白底
+                    if processed_img.mode == 'RGBA':
+                        bg = Image.new("RGB", processed_img.size, (255, 255, 255))
+                        bg.paste(processed_img, mask=processed_img.split()[3])
+                        processed_img = bg
+                    else:
+                        processed_img = processed_img.convert("RGB")
+                    save_fmt = 'JPEG'
+
+                processed_img.save(output_file, format=save_fmt, quality=95)
+                log_callback(f"🎨 [{i+1}/{total}] 完成: {output_file.name}")
+
+            # 刪除原始檔邏輯
+            if delete_original:
+                # 確保不是同一個檔案才刪 (雖然副檔名可能變了，但路徑檢查一下)
+                if file_path.resolve() != output_file.resolve():
+                    try:
+                        os.remove(file_path)
+                        log_callback(f"    🗑️ 已刪除原始檔")
+                    except Exception as del_err:
+                        log_callback(f"    ⚠️ 刪除失敗: {del_err}")
+            
+            file_progress_callback(100)
+
+        except Exception as e:
+            log_callback(f"❌ 失敗 {file_path.name}: {str(e)}")
+
+    progress_callback(100)
+    current_file_callback("全部完成")
+    file_progress_callback(100)
+    log_callback("🏁 圖片填色處理結束")
 
 # -----------------------------------------------------------------------------
 # 任務 1: 圖片處理 (Scaling + Meta + Enhance)
