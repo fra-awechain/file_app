@@ -3,7 +3,7 @@ import subprocess
 import json
 import re
 from pathlib import Path
-from PIL import Image, ImageEnhance
+from PIL import Image, ImageEnhance, ImageChops
 from app.utils import get_files, is_ffmpeg_installed, get_video_duration
 
 def default_logger(msg):
@@ -65,6 +65,142 @@ def get_media_info(file_path):
     return info_str
 
 # -----------------------------------------------------------------------------
+# 核心邏輯：計算顏色匹配遮罩
+# -----------------------------------------------------------------------------
+def get_color_match_mask(img_rgba, target_color_hex, tolerance=0):
+    """
+    建立一個遮罩，其中與 target_color_hex 匹配的像素為白(255)，其餘為黑(0)。
+    tolerance 暫時不實作複雜計算，使用精確匹配。
+    """
+    try:
+        # 將 Hex 轉為 RGB tuple
+        c = target_color_hex.lstrip('#')
+        rgb = tuple(int(c[i:i+2], 16) for i in (0, 2, 4))
+        
+        # 建立純色圖
+        target_img = Image.new('RGB', img_rgba.size, rgb)
+        
+        # 轉換來源圖為 RGB 進行比較 (忽略 Alpha)
+        src_rgb = img_rgba.convert('RGB')
+        
+        # 計算差異
+        diff = ImageChops.difference(src_rgb, target_img)
+        
+        # 轉換為灰階
+        diff = diff.convert('L')
+        
+        # 差異為 0 (全黑) 的地方就是顏色匹配的地方
+        # 我們需要反轉它，讓匹配的地方變白 (255)
+        # point: x==0 -> 255, else 0
+        mask = diff.point(lambda x: 255 if x <= tolerance else 0)
+        return mask
+    except:
+        return Image.new('L', img_rgba.size, 0)
+
+# -----------------------------------------------------------------------------
+# 核心邏輯：單張圖片分區填色處理
+# -----------------------------------------------------------------------------
+def process_single_image_fill(img, settings_opaque, settings_trans, settings_semi):
+    """
+    img: PIL Image (Expected RGBA)
+    settings_*: dict {
+        'target_mode': 'all' | 'specific' | 'non_specific',
+        'target_color': str (hex),
+        'trans_mode': 'maintain' | 'change',
+        'trans_val': int,
+        'fill_mode': 'maintain' | 'color' | 'image',
+        'fill_color': str,
+        'fill_image_path': str,
+        'fill_image_scale': float
+    }
+    """
+    if img.mode != 'RGBA':
+        img = img.convert('RGBA')
+
+    r, g, b, a = img.split()
+    
+    # 建立 Alpha 區域遮罩
+    mask_opaque_alpha = a.point(lambda x: 255 if x == 255 else 0, mode='L')
+    mask_trans_alpha = a.point(lambda x: 255 if x == 0 else 0, mode='L')
+    mask_others = ImageChops.add(mask_opaque_alpha, mask_trans_alpha)
+    mask_semi_alpha = ImageChops.invert(mask_others)
+
+    width, height = img.size
+    final_img = img.copy()
+
+    def process_region(base_img, region_alpha_mask, settings):
+        if not settings: return base_img
+        
+        # 1. 處理目標篩選 (Target Selection)
+        target_mode = settings.get('target_mode', 'all')
+        final_mask = region_alpha_mask
+        
+        if target_mode in ['specific', 'non_specific']:
+            target_color = settings.get('target_color', '#FFFFFF')
+            color_mask = get_color_match_mask(base_img, target_color)
+            
+            if target_mode == 'specific':
+                # 交集: 既在該 Alpha 區間，又是該顏色
+                final_mask = ImageChops.multiply(region_alpha_mask, color_mask)
+            elif target_mode == 'non_specific':
+                # 交集: 既在該 Alpha 區間，又"不是"該顏色
+                inv_color_mask = ImageChops.invert(color_mask)
+                final_mask = ImageChops.multiply(region_alpha_mask, inv_color_mask)
+        
+        # 如果遮罩全黑，則無需處理
+        if final_mask.getbbox() is None:
+            return base_img
+
+        # 2. 填充處理 (Color / Image)
+        fill_layer = None
+        fill_mode = settings.get('fill_mode', 'maintain')
+        
+        if fill_mode == 'color':
+            c_val = settings.get('fill_color', '#FFFFFF')
+            fill_layer = Image.new('RGBA', (width, height), c_val)
+        
+        elif fill_mode == 'image':
+            path = settings.get('fill_image_path')
+            if path and os.path.exists(path):
+                try:
+                    tex = Image.open(path).convert('RGBA')
+                    scale = settings.get('fill_image_scale', 100) / 100.0
+                    if scale <= 0: scale = 0.01
+                    new_w = int(tex.width * scale)
+                    new_h = int(tex.height * scale)
+                    tex = tex.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                    tiled = Image.new('RGBA', (width, height))
+                    for x in range(0, width, new_w):
+                        for y in range(0, height, new_h):
+                            tiled.paste(tex, (x, y))
+                    fill_layer = tiled
+                except: pass
+
+        if fill_layer:
+            base_img = Image.composite(fill_layer, base_img, final_mask)
+
+        # 3. 透明度處理
+        trans_mode = settings.get('trans_mode', 'maintain')
+        if trans_mode == 'change':
+            val = settings.get('trans_val', 0)
+            target_alpha = int(255 - (val * 2.55))
+            if target_alpha < 0: target_alpha = 0
+            if target_alpha > 255: target_alpha = 255
+            
+            alpha_plane = Image.new('L', (width, height), target_alpha)
+            curr_r, curr_g, curr_b, curr_a = base_img.split()
+            new_a = Image.composite(alpha_plane, curr_a, final_mask)
+            base_img = Image.merge('RGBA', (curr_r, curr_g, curr_b, new_a))
+
+        return base_img
+
+    final_img = process_region(final_img, mask_opaque_alpha, settings_opaque)
+    final_img = process_region(final_img, mask_trans_alpha, settings_trans)
+    final_img = process_region(final_img, mask_semi_alpha, settings_semi)
+
+    return final_img
+
+# -----------------------------------------------------------------------------
 # 任務 1: 圖片處理 (Scaling + Meta + Enhance)
 # -----------------------------------------------------------------------------
 def task_scaling(log_callback, progress_callback, current_file_callback, file_progress_callback,
@@ -107,11 +243,9 @@ def task_scaling(log_callback, progress_callback, current_file_callback, file_pr
             output_file = dest_folder / f"{new_stem}{final_ext}"
 
             with Image.open(file_path) as img:
-                # 1. 移除 Meta (如果勾選)
                 if remove_metadata:
                     img.info.clear() 
 
-                # 2. 轉檔前置
                 if final_ext.lower() in ['.jpg', '.jpeg']:
                     if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
                         img = img.convert('RGBA')
@@ -121,7 +255,6 @@ def task_scaling(log_callback, progress_callback, current_file_callback, file_pr
                     elif img.mode != 'RGB':
                         img = img.convert('RGB')
 
-                # 3. 裁切
                 if crop_doubao:
                     w, h = img.size
                     safe_w, safe_h = w - 320, h - 110
@@ -133,7 +266,6 @@ def task_scaling(log_callback, progress_callback, current_file_callback, file_pr
                         img = img.crop((0, 0, crop_w, crop_h))
                         log_callback(f"✂️ [{i+1}/{total}] 裁切: {file_path.name}")
 
-                # 4. 縮放
                 w, h = img.size
                 new_w, new_h = w, h
                 should_resize = False
@@ -144,7 +276,6 @@ def task_scaling(log_callback, progress_callback, current_file_callback, file_pr
                         new_w = int(w * ratio); new_h = int(h * ratio); should_resize = True
                 
                 elif mode == 'width':
-                    # 強制指定寬度
                     target_w = int(mode_value_1)
                     if target_w > 0:
                         ratio = target_w / w
@@ -153,7 +284,6 @@ def task_scaling(log_callback, progress_callback, current_file_callback, file_pr
                         should_resize = True
                 
                 elif mode == 'height':
-                    # 強制指定高度
                     target_h = int(mode_value_1)
                     if target_h > 0:
                         ratio = target_h / h
@@ -167,13 +297,11 @@ def task_scaling(log_callback, progress_callback, current_file_callback, file_pr
                 else:
                     log_callback(f"➡️ [{i+1}/{total}] 處理: {file_path.name}")
 
-                # 5. 影像增強
                 if sharpen_factor != 1.0:
                     img = ImageEnhance.Sharpness(img).enhance(sharpen_factor)
                 if brightness_factor != 1.0:
                     img = ImageEnhance.Brightness(img).enhance(brightness_factor)
 
-                # 6. 儲存與寫入新 Meta
                 save_kwargs = {}
                 if final_ext.lower() in ['.jpg', '.jpeg']:
                     save_kwargs["quality"] = 95
@@ -186,7 +314,6 @@ def task_scaling(log_callback, progress_callback, current_file_callback, file_pr
 
                 img.save(output_file, **save_kwargs)
 
-            # 修正後的刪除邏輯：只要勾選刪除且來源與目標不同，即刪除
             if delete_original:
                 if file_path.absolute() != output_file.absolute():
                     try:
@@ -206,7 +333,7 @@ def task_scaling(log_callback, progress_callback, current_file_callback, file_pr
     log_callback("🏁 圖片處理結束")
 
 # -----------------------------------------------------------------------------
-# 任務 2: 影片銳利化 (含解析度適應、Meta移除)
+# 任務 2: 影片銳利化
 # -----------------------------------------------------------------------------
 def task_video_sharpen(log_callback, progress_callback, current_file_callback, file_progress_callback,
                        input_path, output_path, recursive, 
@@ -273,14 +400,10 @@ def task_video_sharpen(log_callback, progress_callback, current_file_callback, f
 
             output_file = dest_folder / f"{new_stem}{final_ext}"
 
-            # --- FFmpeg Filters ---
             filters = []
-            
-            # 1. 銳利化
             if luma_amount > 0:
                 filters.append(f"unsharp=luma_msize_x={luma_m_size}:luma_msize_y={luma_m_size}:luma_amount={luma_amount}")
             
-            # 2. 縮放邏輯
             if scale_mode == 'ratio':
                 if scale_value != 1.0:
                     filters.append(f"scale=iw*{scale_value}:-2")
@@ -288,7 +411,6 @@ def task_video_sharpen(log_callback, progress_callback, current_file_callback, f
                 target_px = 1080
                 if scale_mode == 'hd720': target_px = 720
                 elif scale_mode == 'hd480': target_px = 480
-                
                 scale_filter = f"scale='if(lt(iw,ih),{target_px},-2)':'if(lt(iw,ih),-2,{target_px})'"
                 filters.append(scale_filter)
 
@@ -296,7 +418,6 @@ def task_video_sharpen(log_callback, progress_callback, current_file_callback, f
 
             cmd = ["ffmpeg", "-y", "-i", str(file_path)]
             
-            # --- 編碼設定 ---
             if filters or convert_h264 or final_ext != original_ext or remove_metadata or author or description:
                 cmd.extend(["-c:v", "libx264", "-crf", "23", "-preset", "medium"])
                 if filter_str: cmd.extend(["-vf", filter_str])
@@ -305,7 +426,6 @@ def task_video_sharpen(log_callback, progress_callback, current_file_callback, f
             
             cmd.extend(["-c:a", "copy"])
 
-            # --- Metadata 處理 ---
             if remove_metadata:
                 cmd.extend(["-map_metadata", "-1"]) 
             
@@ -318,7 +438,6 @@ def task_video_sharpen(log_callback, progress_callback, current_file_callback, f
 
             cmd.append(str(output_file))
 
-            # 執行
             process = subprocess.Popen(cmd, stderr=subprocess.PIPE, universal_newlines=True)
             current_file_duration = file_durations.get(str(file_path), 1.0)
 
@@ -327,10 +446,8 @@ def task_video_sharpen(log_callback, progress_callback, current_file_callback, f
                 if match:
                     h, m, s = map(float, match.groups())
                     processed_sec = h * 3600 + m * 60 + s
-                    
                     file_pct = int((processed_sec / current_file_duration) * 100)
                     file_progress_callback(min(file_pct, 99))
-                    
                     total_processed = accumulated_duration + processed_sec
                     total_pct = int((total_processed / total_batch_duration) * 100)
                     progress_callback(min(total_pct, 99))
@@ -458,3 +575,79 @@ def task_multi_res(log_callback, progress_callback, current_file_callback, file_
     current_file_callback("全部完成")
     file_progress_callback(100)
     log_callback("🏁 多尺寸任務結束")
+
+# -----------------------------------------------------------------------------
+# 任務 5: 圖片填色 (Image Fill)
+# -----------------------------------------------------------------------------
+def task_image_fill(log_callback, progress_callback, current_file_callback, file_progress_callback,
+                    input_path, output_path, recursive,
+                    settings_opaque, settings_trans, settings_semi,
+                    delete_original, output_format):
+    
+    log_callback("🚀 [Image Fill] 開始填色處理")
+    
+    # 支援所有 Image 格式
+    files = get_files(input_path, recursive, file_types='image')
+    total = len(files)
+    
+    if total == 0:
+        log_callback("⚠️ 未找到任何圖片")
+        return
+
+    out_dir_base = Path(output_path)
+    if not out_dir_base.exists():
+        out_dir_base.mkdir(parents=True, exist_ok=True)
+
+    target_ext = f".{output_format}" # .jpg, .png, .webp
+
+    for i, file_path in enumerate(files):
+        try:
+            pct = int(((i) / total) * 100)
+            progress_callback(pct)
+            current_file_callback(file_path.name)
+            file_progress_callback(0)
+
+            if Path(input_path).is_dir():
+                rel_path = file_path.relative_to(Path(input_path))
+            else:
+                rel_path = Path(file_path.name)
+            
+            dest_folder = out_dir_base / rel_path.parent
+            dest_folder.mkdir(parents=True, exist_ok=True)
+            
+            # 決定輸出檔名
+            output_file = dest_folder / f"{file_path.stem}{target_ext}"
+
+            with Image.open(file_path) as img:
+                processed_img = process_single_image_fill(img, settings_opaque, settings_trans, settings_semi)
+                
+                # 格式處理
+                save_fmt = output_format.upper()
+                if save_fmt == 'JPG' or save_fmt == 'JPEG':
+                    # JPG 不支援透明，需轉 RGB (補白底)
+                    bg = Image.new("RGB", processed_img.size, (255, 255, 255))
+                    bg.paste(processed_img, mask=processed_img.split()[3] if processed_img.mode=='RGBA' else None)
+                    processed_img = bg
+                    save_fmt = 'JPEG'
+
+                processed_img.save(output_file, format=save_fmt)
+                log_callback(f"🎨 [{i+1}/{total}] 處理: {file_path.name} -> {output_file.name}")
+
+            # 刪除原始檔
+            if delete_original:
+                if file_path.absolute() != output_file.absolute():
+                    try:
+                        os.remove(file_path)
+                        log_callback(f"    🗑️ 刪除原始檔")
+                    except Exception as del_err:
+                        log_callback(f"    ⚠️ 刪除失敗: {str(del_err)}")
+            
+            file_progress_callback(100)
+
+        except Exception as e:
+            log_callback(f"❌ 失敗 {file_path.name}: {str(e)}")
+
+    progress_callback(100)
+    current_file_callback("全部完成")
+    file_progress_callback(100)
+    log_callback("🏁 圖片填色處理結束")
