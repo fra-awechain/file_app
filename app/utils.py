@@ -4,9 +4,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-# 支援的圖片格式
 VALID_IMG_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.webp', '.tiff', '.heic'}
-# 支援的影片格式
 VALID_VIDEO_EXTS = {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.flv'}
 
 def get_files(input_path, recursive=False, file_types='image'):
@@ -35,24 +33,6 @@ def get_files(input_path, recursive=False, file_types='image'):
 def is_ffmpeg_installed():
     return shutil.which("ffmpeg") is not None
 
-def show_notification(title, message):
-    try:
-        if sys.platform == "darwin":
-            script = f'display notification "{message}" with title "{title}" sound name "default"'
-            subprocess.run(["osascript", "-e", script])
-        elif sys.platform == "win32":
-            ps_script = f"""
-            [void] [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms")
-            $objNotifyIcon = New-Object System.Windows.Forms.NotifyIcon 
-            $objNotifyIcon.Icon = [System.Drawing.SystemIcons]::Information 
-            $objNotifyIcon.Visible = $True 
-            $objNotifyIcon.ShowBalloonTip(0, "{title}", "{message}", [System.Windows.Forms.ToolTipIcon]::None)
-            """
-            subprocess.run(["powershell", "-Command", ps_script], creationflags=subprocess.CREATE_NO_WINDOW)
-    except Exception as e:
-        print(f"Notification Error: {e}")
-
-# 新增：取得影片總秒數 (為了計算進度條)
 def get_video_duration(file_path):
     try:
         cmd = [
