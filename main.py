@@ -1,136 +1,167 @@
 import sys
 import os
 from PySide6.QtWidgets import QApplication
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtGui import QFont
 from app.ui import MainWindow
 
 # 定義全域樣式表 (QSS)
 STYLESHEET = """
-/* 全域設定 */
+/* 全域字體與顏色 */
 QWidget {
     font-family: 'Segoe UI', 'Microsoft JhengHei UI', sans-serif;
     font-size: 16px;
     color: #333333;
 }
 
-/* 側邊欄樣式 (模擬 Slate-800) */
-QWidget#SidebarFrame {
-    background-color: #1e293b; 
-    border-right: 1px solid #0f172a;
+/* 1. 修正 Checkbox (回歸系統樣式，但微調間距) */
+QCheckBox {
+    spacing: 8px;
+    padding: 4px;
 }
+/* 移除所有自定義 indicator 樣式，讓它顯示原生勾選框，確保功能正常 */
 
-/* 側邊欄按鈕 (未選中) */
-QFrame#SidebarBtn {
-    background-color: transparent;
-    border-radius: 8px;
-    margin: 4px 12px;
-}
-QFrame#SidebarBtn:hover {
-    background-color: #334155; /* slate-700 */
-}
-/* 側邊欄按鈕文字 */
-QLabel#SidebarBtnText {
-    color: #cbd5e1; /* slate-300 */
-    font-weight: 500;
-}
-/* 側邊欄按鈕 (選中狀態) - 在 Python Code 中動態切換 Style，這裡定義通用部分 */
-
-/* 右側面板樣式 (強制底色 #dfd4ba) */
+/* 2. 右側面板背景 (米黃色) */
 QWidget#RightFrame, QScrollArea, QWidget#ScrollContent {
+    background-color: #dfd4ba;
+    border: none;
+}
+/* 強制 ScrollArea 的 viewport 也是米黃色 */
+QScrollArea > QWidget > QWidget {
     background-color: #dfd4ba;
 }
 
-/* 右側面板內的元件樣式 */
+/* 3. 按鈕樣式 (一般按鈕) */
+QPushButton {
+    background-color: #f8f9fa;
+    border: 1px solid #999;
+    border-radius: 6px;
+    padding: 8px 16px;
+    font-weight: 600;
+    color: #333;
+    min-height: 24px;
+}
+QPushButton:hover {
+    background-color: #e2e6ea;
+    border-color: #666;
+}
+QPushButton:pressed {
+    background-color: #dae0e5;
+}
+
+/* 4. 執行按鈕 (Action Button - 強制藍色) */
+QPushButton#ExecBtn {
+    background-color: #2563eb;
+    color: white;
+    border: 1px solid #1d4ed8;
+    font-size: 18px;
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-weight: bold;
+}
+QPushButton#ExecBtn:hover {
+    background-color: #1d4ed8;
+}
+QPushButton#ExecBtn:pressed {
+    background-color: #1e40af;
+}
+
+/* 5. 輸入框 (白底 + 加高) */
+QLineEdit, QComboBox, QSpinBox {
+    border: 1px solid #888;
+    border-radius: 6px;
+    padding: 4px 8px; /* 內距 */
+    background-color: #ffffff; /* 白底 */
+    selection-background-color: #3b82f6;
+    min-height: 28px; /* 加高 */
+    color: #333;
+}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus {
+    border: 2px solid #3b82f6;
+}
+
+/* 6. 進度條 (修復樣式) */
+QProgressBar {
+    border: 1px solid #999;
+    background-color: #e0e0e0; /* 灰色底 */
+    border-radius: 6px;
+    height: 16px; /* 加高 */
+    text-align: center;
+    color: black;
+}
+QProgressBar::chunk {
+    background-color: #3b82f6; /* 藍色進度 */
+    border-radius: 5px;
+}
+
+/* 7. Scrollbar (灰色樣式) */
+QScrollBar:vertical {
+    border: none;
+    background: #e0e0e0; /* 淺灰軌道 */
+    width: 14px;
+    margin: 0px;
+}
+QScrollBar::handle:vertical {
+    background: #999; /* 深灰拉桿 */
+    min-height: 20px;
+    border-radius: 7px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #777;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+
+/* 8. GroupBox */
 QGroupBox {
     font-weight: bold;
     border: 1px solid #a89f8a;
     border-radius: 8px;
     margin-top: 24px;
-    padding-top: 16px;
-    background-color: rgba(255, 255, 255, 0.2); 
+    padding-top: 24px;
+    background-color: rgba(255, 255, 255, 0.4); 
 }
 QGroupBox::title {
     subcontrol-origin: margin;
     subcontrol-position: top left;
     left: 10px;
     padding: 0 5px;
-    color: #4b5563; /* gray-600 */
+    color: #222;
 }
 
-/* 輸入框與下拉選單 - 加大與現代化 */
-QLineEdit, QComboBox, QSpinBox {
-    border: 1px solid #9ca3af;
-    border-radius: 6px;
-    padding: 6px 8px; /* 加大內距 */
-    background-color: #ffffff;
-    selection-background-color: #3b82f6;
-    min-height: 24px; 
+/* 9. 側邊欄樣式 */
+QWidget#SidebarFrame {
+    background-color: #1e293b; 
+    border-right: 1px solid #0f172a;
 }
-QLineEdit:focus, QComboBox:focus {
-    border: 2px solid #3b82f6; /* Focus ring */
-}
-
-/* 按鈕樣式 */
-QPushButton {
-    background-color: #ffffff;
-    border: 1px solid #cbd5e1;
-    border-radius: 6px;
-    padding: 6px 16px;
-    font-weight: 600;
-    color: #475569;
-}
-QPushButton:hover {
-    background-color: #f1f5f9;
-    border-color: #94a3b8;
-}
-QPushButton:pressed {
-    background-color: #e2e8f0;
-}
-
-/* 主要執行按鈕 (Action Button) */
-QPushButton#ExecBtn {
-    background-color: #2563eb; /* blue-600 */
-    color: white;
-    border: none;
-    font-size: 18px;
-    padding: 12px 24px;
+QFrame#SidebarBtn {
+    background-color: transparent;
     border-radius: 8px;
+    margin: 4px 12px;
 }
-QPushButton#ExecBtn:hover {
-    background-color: #1d4ed8;
+QFrame#SidebarBtn:hover {
+    background-color: #334155;
 }
-
-/* 進度條 */
-QProgressBar {
-    border: none;
-    background-color: #e2e8f0;
-    border-radius: 4px;
-    height: 8px;
-    text-align: center;
-}
-QProgressBar::chunk {
-    background-color: #3b82f6;
-    border-radius: 4px;
+QLabel#SidebarBtnText {
+    color: #cbd5e1;
+    font-weight: 500;
 }
 
-/* 滑桿 */
-QSlider::groove:horizontal {
-    border: 1px solid #bbb;
-    background: white;
-    height: 6px;
-    border-radius: 3px;
+/* 10. 拖曳區塊 (DragDrop) - 確保樣式生效 */
+QLabel#DragDrop {
+    border: 2px dashed #777;
+    border-radius: 6px;
+    color: #555;
+    background-color: rgba(255, 255, 255, 0.7);
+    font-size: 12px;
+    min-width: 60px;
+    qproperty-alignment: AlignCenter;
 }
-QSlider::sub-page:horizontal {
-    background: #3b82f6;
-    border-radius: 3px;
-}
-QSlider::handle:horizontal {
-    background: #f8fafc;
-    border: 1px solid #64748b;
-    width: 18px;
-    height: 18px;
-    margin: -7px 0;
-    border-radius: 9px;
+QLabel#DragDrop:hover {
+    border-color: #2563eb;
+    background-color: rgba(37, 99, 235, 0.1);
+    color: #2563eb;
+    font-weight: bold;
 }
 """
 
@@ -139,7 +170,7 @@ def main():
     
     # 設定字型
     font_family = "Segoe UI" if os.name == "nt" else "PingFang TC"
-    app.setFont(QFont(font_family, 10)) # 這裡設 10pt 約等於 13px，主要靠 QSS 的 16px 覆蓋
+    app.setFont(QFont(font_family, 10))
     
     # 應用樣式表
     app.setStyleSheet(STYLESHEET)
