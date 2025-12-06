@@ -6,130 +6,146 @@ from app.ui import MainWindow
 
 # 定義全域樣式表 (QSS)
 STYLESHEET = """
-/* 全域設定 */
+/* 全域字體與顏色 */
 QWidget {
     font-family: 'Segoe UI', 'Microsoft JhengHei UI', sans-serif;
-    font-size: 16px;
+    font-size: 14px;
     color: #333333;
 }
 
-/* 側邊欄樣式 (模擬 Slate-800) */
-QWidget#SidebarFrame {
-    background-color: #1e293b; 
-    border-right: 1px solid #0f172a;
-}
-
-/* 側邊欄按鈕 (未選中) */
-QFrame#SidebarBtn {
-    background-color: transparent;
-    border-radius: 8px;
-    margin: 4px 12px;
-}
-QFrame#SidebarBtn:hover {
-    background-color: #334155; /* slate-700 */
-}
-/* 側邊欄按鈕文字 */
-QLabel#SidebarBtnText {
-    color: #cbd5e1; /* slate-300 */
-    font-weight: 500;
-}
-
-/* 右側面板樣式 (強制底色 #dfd4ba) */
+/* 右側面板背景 */
 QWidget#RightFrame, QScrollArea, QWidget#ScrollContent {
     background-color: #dfd4ba;
     border: none;
 }
-
-/* 右側面板內的元件樣式 */
-QGroupBox {
-    font-weight: bold;
-    border: 1px solid #a89f8a;
-    border-radius: 8px;
-    margin-top: 24px;
-    padding-top: 20px;
-    background-color: rgba(255, 255, 255, 0.4); 
-}
-QGroupBox::title {
-    subcontrol-origin: margin;
-    subcontrol-position: top left;
-    left: 10px;
-    padding: 0 5px;
-    color: #4b5563; /* gray-600 */
+QScrollArea > QWidget > QWidget {
+    background-color: #dfd4ba;
 }
 
-/* 輸入框與下拉選單 */
-QLineEdit, QComboBox, QSpinBox {
-    border: 1px solid #9ca3af;
-    border-radius: 6px;
-    padding: 6px 8px;
-    background-color: #ffffff;
-    selection-background-color: #3b82f6;
-    min-height: 24px; 
-    color: #333;
-}
-QLineEdit:focus, QComboBox:focus {
-    border: 2px solid #3b82f6;
-}
-
-/* 按鈕預設樣式 */
+/* 通用按鈕 */
 QPushButton {
-    background-color: #ffffff;
-    border: 1px solid #cbd5e1;
+    background-color: #f8f9fa;
+    border: 1px solid #999;
     border-radius: 6px;
-    padding: 6px 16px;
+    padding: 6px 12px;
     font-weight: 600;
-    color: #475569;
+    color: #333;
+    min-height: 24px;
 }
 QPushButton:hover {
-    background-color: #f1f5f9;
-    border-color: #94a3b8;
+    background-color: #e2e6ea;
+    border-color: #666;
 }
 QPushButton:pressed {
-    background-color: #e2e8f0;
+    background-color: #dae0e5;
 }
 
-/* --- [待修復項目 2] 開始執行按鈕 (強制藍色底色) --- */
+/* [修正] 開始執行按鈕 (固定底部，藍色底色) */
 QPushButton#ExecBtn {
-    background-color: #2563eb; /* Blue-600 */
+    background-color: #2563eb; 
     color: white;
     border: 1px solid #2563eb;
-    font-size: 18px;
-    padding: 12px 24px;
-    border-radius: 8px;
+    font-size: 16px;
+    padding: 10px 24px;
+    border-radius: 6px;
     font-weight: bold;
 }
 QPushButton#ExecBtn:hover {
-    background-color: #1d4ed8; /* Blue-700 */
+    background-color: #1d4ed8;
     border-color: #1d4ed8;
 }
 QPushButton#ExecBtn:pressed {
-    background-color: #1e40af; /* Blue-800 */
+    background-color: #1e40af;
     border-color: #1e40af;
 }
 
-/* --- [待修復項目 3] 清除 Log 按鈕 (深灰底 + Pointer) --- */
+/* 清除 Log 按鈕 (深灰底) */
 QPushButton#ClearLogBtn {
     background-color: #4b5563; /* Gray-600 */
     color: white;
     border: 1px solid #374151;
     border-radius: 4px;
-    font-size: 13px;
-    padding: 4px 12px;
+    font-size: 12px;
+    padding: 4px 8px;
+    min-width: 70px;
 }
 QPushButton#ClearLogBtn:hover {
     background-color: #374151; /* Gray-700 */
 }
 
-/* --- [待修復項目 4] 進度條樣式 --- */
+/* 輸入框與選單 */
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+    border: 1px solid #888;
+    border-radius: 4px;
+    padding: 4px 8px;
+    background-color: #ffffff;
+    selection-background-color: #3b82f6;
+    min-height: 26px;
+    color: #333;
+}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+    border: 2px solid #3b82f6;
+}
 
-/* 總進度條 (顯示百分比) */
+/* ComboBox 下拉選單背景為白色 */
+QComboBox QAbstractItemView {
+    background-color: #ffffff;
+    color: #333333;
+    selection-background-color: #3b82f6;
+    selection-color: #ffffff;
+    border: 1px solid #888;
+    outline: none;
+}
+
+/* [修正] 通用 Checkbox (淺灰底色) */
+QCheckBox {
+    spacing: 8px;
+    padding: 6px;
+    background-color: #f1f5f9; /* Slate-100 */
+    border-radius: 4px;
+    border: 1px solid #cbd5e1;
+}
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+}
+
+/* 特殊樣式：貼合尺寸裁切 Checkbox (粉色背景) */
+QCheckBox#PinkCheck {
+    background-color: #fce7f3; /* Pink-100 */
+    color: #9d174d;          /* Pink-800 */
+    border: 1px solid #fbcfe8;
+}
+
+/* [修正] 滑桿軌道樣式 (增加灰色底色) */
+QSlider::groove:horizontal {
+    border: 1px solid #ccc;
+    height: 6px; /* 軌道高度 */
+    background: #e5e7eb; /* 軌道底色 Gray-200 */
+    margin: 2px 0;
+    border-radius: 3px;
+}
+QSlider::sub-page:horizontal {
+    background: #3b82f6; /* 滑過的部分 Blue-500 */
+    border-radius: 3px;
+}
+QSlider::handle:horizontal {
+    background: #f8fafc;
+    border: 1px solid #64748b;
+    width: 16px;
+    height: 16px;
+    margin: -6px 0; /* 垂直置中 */
+    border-radius: 8px;
+}
+
+/* 總進度條 */
 QProgressBar#TotalProgress {
     border: 1px solid #94a3b8;
     background-color: #e2e8f0;
     border-radius: 6px;
-    height: 18px;
+    height: 20px;
     text-align: center;
-    color: #0f172a; /* 文字顏色 */
+    color: #0f172a;
     font-weight: bold;
 }
 QProgressBar#TotalProgress::chunk {
@@ -137,54 +153,82 @@ QProgressBar#TotalProgress::chunk {
     border-radius: 5px;
 }
 
-/* 檔案進度條 (不顯示文字) */
+/* 檔案進度條 (綠色) */
 QProgressBar#FileProgress {
     border: 1px solid #cbd5e1;
     background-color: #e2e8f0;
     border-radius: 4px;
-    height: 10px;
+    height: 14px;
     text-align: center;
-    color: transparent; /* 隱藏文字 */
+    color: #0f172a; 
+    font-size: 10px;
+    font-weight: bold;
 }
 QProgressBar#FileProgress::chunk {
     background-color: #22c55e; /* Green */
     border-radius: 3px;
 }
 
-/* 滑桿 */
-QSlider::groove:horizontal {
-    border: 1px solid #bbb;
-    background: white;
-    height: 6px;
-    border-radius: 3px;
+/* GroupBox */
+QGroupBox {
+    font-weight: bold;
+    border: 1px solid #a89f8a;
+    border-radius: 8px;
+    margin-top: 20px;
+    padding-top: 20px;
+    background-color: rgba(255, 255, 255, 0.5); 
 }
-QSlider::sub-page:horizontal {
-    background: #3b82f6;
-    border-radius: 3px;
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px;
+    padding: 0 5px;
+    color: #222;
 }
-QSlider::handle:horizontal {
-    background: #f8fafc;
-    border: 1px solid #64748b;
-    width: 18px;
-    height: 18px;
-    margin: -7px 0;
-    border-radius: 9px;
+
+/* 側邊欄樣式 */
+QWidget#SidebarFrame {
+    background-color: #1e293b; 
+    border-right: 1px solid #0f172a;
+}
+QFrame#SidebarBtn {
+    background-color: transparent;
+    border-radius: 8px;
+    margin: 4px 12px;
+}
+QFrame#SidebarBtn:hover {
+    background-color: #334155;
+}
+QLabel#SidebarBtnText {
+    color: #cbd5e1;
+    font-weight: 500;
+}
+
+/* 拖曳區塊樣式 */
+QLabel#DragDrop {
+    border: 2px dashed #999;
+    border-radius: 6px;
+    color: #666;
+    background-color: rgba(255, 255, 255, 0.6);
+    font-size: 12px;
+    min-width: 70px;
+    qproperty-alignment: AlignCenter;
+}
+QLabel#DragDrop:hover {
+    border-color: #2563eb;
+    background-color: rgba(37, 99, 235, 0.1);
+    color: #2563eb;
+    font-weight: bold;
 }
 """
 
 def main():
     app = QApplication(sys.argv)
-    
-    # 設定字型
     font_family = "Segoe UI" if os.name == "nt" else "PingFang TC"
-    app.setFont(QFont(font_family, 10)) 
-    
-    # 應用樣式表
+    app.setFont(QFont(font_family, 10))
     app.setStyleSheet(STYLESHEET)
-    
     window = MainWindow()
     window.show()
-    
     sys.exit(app.exec())
 
 if __name__ == "__main__":

@@ -1,1090 +1,873 @@
-from datetime import datetime
-from pathlib import Path
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                                QPushButton, QLabel, QTextEdit, QFileDialog, 
                                QStackedWidget, QLineEdit, QCheckBox, QGroupBox, 
                                QFormLayout, QComboBox, QSplitter, QScrollArea, QFrame, 
-                               QMessageBox, QProgressBar, QColorDialog, QSlider, QSpinBox,
-                               QDialog, QSizePolicy, QGridLayout)
-from PySide6.QtCore import Qt, QSettings, Signal, QSize
-from PySide6.QtGui import QTextCursor, QPixmap, QImage, QColor, QCursor, QIcon, QDragEnterEvent, QDropEvent
-
+                               QProgressBar, QColorDialog, QDialog, QSpinBox, QDoubleSpinBox, QGridLayout, QSlider)
+from PySide6.QtCore import Qt, QSettings, Signal
+from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from app.workers import Worker
 import app.logic as logic
-import app.utils as utils
+from pathlib import Path
 
 # -----------------------------------------------------------
-# 自定義元件：SelectableLabel (可選取文字的 Label)
+# 元件：SelectableLabel (可選取文字)
 # -----------------------------------------------------------
 class SelectableLabel(QLabel):
-    def __init__(self, text="", parent=None):
+    def __init__(self, text="", parent=None, **kwargs):
         super().__init__(text, parent)
         self.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.setCursor(Qt.IBeamCursor)
-        self.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        if 'alignment' in kwargs: self.setAlignment(kwargs['alignment'])
+        if 'styleSheet' in kwargs: self.setStyleSheet(kwargs['styleSheet'])
+        if 'fixedHeight' in kwargs: self.setFixedHeight(kwargs['fixedHeight'])
 
 # -----------------------------------------------------------
-# 自定義元件：DragDropArea (拖曳區塊)
+# 元件：DragDropArea
 # -----------------------------------------------------------
 class DragDropArea(QLabel):
     fileDropped = Signal(str)
-
     def __init__(self, parent=None):
         super().__init__("拖放至此", parent)
+        self.setObjectName("DragDrop")
         self.setAlignment(Qt.AlignCenter)
         self.setAcceptDrops(True)
-        # 設定虛線邊框與樣式
-        self.setStyleSheet("""
-            QLabel {
-                border: 2px dashed #888;
-                border-radius: 6px;
-                color: #666;
-                background-color: rgba(255, 255, 255, 0.6);
-                font-size: 12px;
-                min-width: 70px;
-                max-width: 80px;
-            }
-            QLabel:hover {
-                border-color: #3b82f6;
-                color: #3b82f6;
-                background-color: rgba(59, 130, 246, 0.1);
-            }
-        """)
-
-    def dragEnterEvent(self, event: QDragEnterEvent):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def dropEvent(self, event: QDropEvent):
-        urls = event.mimeData().urls()
-        if urls:
-            file_path = urls[0].toLocalFile()
-            self.fileDropped.emit(file_path)
+    def dragEnterEvent(self, e: QDragEnterEvent):
+        if e.mimeData().hasUrls(): e.acceptProposedAction()
+    def dropEvent(self, e: QDropEvent):
+        u = e.mimeData().urls()
+        if u: self.fileDropped.emit(u[0].toLocalFile())
 
 # -----------------------------------------------------------
-# 自定義元件：SidebarButton
+# 元件：WhiteComboBox
+# -----------------------------------------------------------
+class WhiteComboBox(QComboBox):
+    def __init__(self, parent=None): super().__init__(parent)
+
+# -----------------------------------------------------------
+# 元件：SliderInput (滑桿+輸入框)
+# -----------------------------------------------------------
+class SliderInput(QWidget):
+    valueChanged = Signal(float)
+    def __init__(self, min_val, max_val, step=0.1, default=1.0, suffix=""):
+        super().__init__()
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0,0,0,0)
+        self.scale = 10 if isinstance(step, float) else 1
+        
+        self.sl = QSlider(Qt.Horizontal)
+        self.sl.setRange(int(min_val*self.scale), int(max_val*self.scale))
+        self.sl.setValue(int(default*self.scale))
+        
+        if isinstance(step, float):
+            self.sb = QDoubleSpinBox()
+            self.sb.setSingleStep(step)
+        else:
+            self.sb = QSpinBox()
+            self.sb.setSingleStep(int(step))
+            
+        self.sb.setRange(min_val, max_val)
+        self.sb.setValue(default)
+        self.sb.setSuffix(suffix)
+        self.sb.setFixedWidth(80)
+        
+        self.sl.valueChanged.connect(self._on_slider_change)
+        self.sb.valueChanged.connect(self._on_spin_change)
+        
+        layout.addWidget(self.sl)
+        layout.addWidget(self.sb)
+    
+    def _on_slider_change(self, v):
+        val = v / self.scale
+        self.sb.blockSignals(True)
+        self.sb.setValue(val)
+        self.sb.blockSignals(False)
+        self.valueChanged.emit(val)
+
+    def _on_spin_change(self, v):
+        val = int(v * self.scale)
+        self.sl.blockSignals(True)
+        self.sl.setValue(val)
+        self.sl.blockSignals(False)
+        self.valueChanged.emit(v)
+
+    def value(self): return self.sb.value()
+
+# -----------------------------------------------------------
+# 元件：SidebarButton
 # -----------------------------------------------------------
 class SidebarButton(QFrame):
     clicked = Signal(int)
-
     def __init__(self, text, icon_char, index, parent=None):
         super().__init__(parent)
-        self.setObjectName("SidebarBtn")
         self.index = index
         self.setCursor(Qt.PointingHandCursor)
         self.setMinimumHeight(60)
-
+        self.setObjectName("SidebarBtn")
+        
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(20, 0, 20, 0)
+        layout.setContentsMargins(20,0,20,0)
         layout.setSpacing(15)
-
-        self.indicator = QWidget()
-        self.indicator.setFixedSize(4, 24)
-        self.indicator.setStyleSheet("background-color: transparent; border-radius: 2px;")
         
-        self.icon_label = QLabel(icon_char)
-        self.icon_label.setStyleSheet("color: #94a3b8; font-size: 20px; background: transparent;")
+        self.ind = QWidget()
+        self.ind.setFixedSize(4,24)
+        self.ind.setStyleSheet("background:transparent;border-radius:2px;")
         
-        self.text_label = QLabel(text)
-        self.text_label.setObjectName("SidebarBtnText")
-        self.text_label.setStyleSheet("font-size: 16px; background: transparent;")
+        self.ic = QLabel(icon_char)
+        self.ic.setStyleSheet("color:#94a3b8;font-size:20px;background:transparent;")
         
-        layout.addWidget(self.indicator)
-        layout.addWidget(self.icon_label)
-        layout.addWidget(self.text_label)
+        self.txt = QLabel(text)
+        self.txt.setObjectName("SidebarBtnText")
+        self.txt.setStyleSheet("font-size:16px;background:transparent;")
+        
+        layout.addWidget(self.ind)
+        layout.addWidget(self.ic)
+        layout.addWidget(self.txt)
         layout.addStretch()
 
-    def set_selected(self, selected):
-        if selected:
-            self.indicator.setStyleSheet("background-color: #38bdf8;")
-            self.icon_label.setStyleSheet("color: #38bdf8; font-size: 20px; background: transparent;")
-            self.text_label.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 16px; background: transparent;")
-            self.setStyleSheet("background-color: #334155; border-radius: 8px;")
+    def set_selected(self, s):
+        if s:
+            self.ind.setStyleSheet("background:#38bdf8;")
+            self.ic.setStyleSheet("color:#38bdf8;font-size:20px;background:transparent;")
+            self.txt.setStyleSheet("color:white;font-weight:bold;font-size:16px;background:transparent;")
+            self.setStyleSheet("background:#334155;border-radius:8px;")
         else:
-            self.indicator.setStyleSheet("background-color: transparent;")
-            self.icon_label.setStyleSheet("color: #94a3b8; font-size: 20px; background: transparent;")
-            self.text_label.setStyleSheet("color: #cbd5e1; font-weight: normal; font-size: 16px; background: transparent;")
-            self.setStyleSheet("background-color: transparent;")
+            self.ind.setStyleSheet("background:transparent;")
+            self.ic.setStyleSheet("color:#94a3b8;font-size:20px;background:transparent;")
+            self.txt.setStyleSheet("color:#cbd5e1;font-weight:normal;font-size:16px;background:transparent;")
+            self.setStyleSheet("background:transparent;")
 
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
             self.clicked.emit(self.index)
 
 # -----------------------------------------------------------
-# 自定義元件：WhiteComboBox (強制白底黑字 + 自動寬度)
+# 元件：ImageEditorDialog
 # -----------------------------------------------------------
-class WhiteComboBox(QComboBox):
+class ImageEditorDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setStyleSheet("""
-            QComboBox {
-                background-color: #ffffff;
-                color: #333333;
-                border: 1px solid #9ca3af;
-                border-radius: 6px;
-                padding: 6px 8px;
-                min-height: 24px;
-            }
-            QComboBox:focus {
-                border: 2px solid #3b82f6;
-            }
-            QComboBox::drop-down {
-                border: none;
-                background: transparent;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #ffffff;
-                color: #333333;
-                selection-background-color: #3b82f6;
-                selection-color: #ffffff;
-                border: 1px solid #cbd5e1;
-                outline: none;
-            }
-        """)
-
-    def showPopup(self):
-        width = self.width()
-        fm = self.fontMetrics()
-        max_item_width = 0
-        for i in range(self.count()):
-            item_width = fm.horizontalAdvance(self.itemText(i)) + 40 
-            if item_width > max_item_width:
-                max_item_width = item_width
-        
-        if max_item_width > width:
-            self.view().setFixedWidth(max_item_width)
-        else:
-            self.view().setFixedWidth(width)
-        super().showPopup()
-
-# -----------------------------------------------------------
-# 圖片填色 - 紋理選擇 Popup
-# -----------------------------------------------------------
-class TextureDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("選擇填充圖片")
-        self.resize(500, 600)
-        self.image_path = ""
-        self.scale = 100
-        self.init_ui()
-
-    def init_ui(self):
+        self.setWindowTitle("圖片編輯器")
+        self.resize(500, 400)
         layout = QVBoxLayout(self)
-        self.setStyleSheet("background-color: #f0f0f0; color: #333;")
+        self.path = ""
         
-        self.preview_lbl = SelectableLabel("請選擇圖片")
-        self.preview_lbl.setAlignment(Qt.AlignCenter)
-        self.preview_lbl.setStyleSheet("border: 2px dashed #ccc; background: #fff; color: #888;")
-        self.preview_lbl.setMinimumHeight(300)
-        layout.addWidget(self.preview_lbl)
-
-        btn_browse = QPushButton("瀏覽圖片...")
-        btn_browse.clicked.connect(self.browse_image)
-        layout.addWidget(btn_browse)
-
-        scale_layout = QHBoxLayout()
-        scale_layout.addWidget(SelectableLabel("縮放比例 (%):"))
-        self.slider = QSlider(Qt.Horizontal)
-        self.slider.setRange(1, 400)
-        self.slider.setValue(100)
-        self.slider.valueChanged.connect(self.update_preview)
+        top = QHBoxLayout()
+        btn_load = QPushButton("選擇圖片")
+        btn_load.clicked.connect(self.load_img)
+        self.dd = DragDropArea()
+        self.dd.fileDropped.connect(self.load_img_path)
+        top.addWidget(btn_load)
+        top.addWidget(self.dd)
+        layout.addLayout(top)
         
-        self.spin = QSpinBox()
-        self.spin.setRange(1, 400)
-        self.spin.setValue(100)
-        self.spin.valueChanged.connect(self.slider.setValue)
-        self.slider.valueChanged.connect(self.spin.setValue)
+        self.preview = QLabel("預覽")
+        self.preview.setAlignment(Qt.AlignCenter)
+        self.preview.setStyleSheet("border:1px dashed #999;")
+        self.preview.setMinimumHeight(200)
+        layout.addWidget(self.preview)
         
-        scale_layout.addWidget(self.slider)
-        scale_layout.addWidget(self.spin)
-        layout.addLayout(scale_layout)
+        ctrl = QFormLayout()
+        self.sl_s = SliderInput(10, 200, 1, 100, "%")
+        ctrl.addRow(SelectableLabel("縮放:"), self.sl_s)
+        self.sl_r = SliderInput(0, 360, 1, 0, "°")
+        ctrl.addRow(SelectableLabel("旋轉:"), self.sl_r)
+        self.sl_x = SliderInput(-500, 500, 1, 0, "px")
+        ctrl.addRow(SelectableLabel("X 位移:"), self.sl_x)
+        self.sl_y = SliderInput(-500, 500, 1, 0, "px")
+        ctrl.addRow(SelectableLabel("Y 位移:"), self.sl_y)
+        layout.addLayout(ctrl)
+        
+        btn = QPushButton("確定")
+        btn.clicked.connect(self.accept)
+        layout.addWidget(btn)
 
-        btn_box = QHBoxLayout()
-        btn_cancel = QPushButton("取消")
-        btn_cancel.clicked.connect(self.reject)
-        btn_ok = QPushButton("確定")
-        btn_ok.setStyleSheet("background-color: #2563eb; color: white; border:none; font-weight: bold; padding: 6px 16px; border-radius: 4px;")
-        btn_ok.clicked.connect(self.accept)
-        btn_box.addStretch()
-        btn_box.addWidget(btn_cancel)
-        btn_box.addWidget(btn_ok)
-        layout.addLayout(btn_box)
+    def load_img(self):
+        f, _ = QFileDialog.getOpenFileName(self)
+        if f: self.load_img_path(f)
 
-    def browse_image(self):
-        path, _ = QFileDialog.getOpenFileName(self, "選擇圖片", "", "Images (*.png *.jpg *.jpeg *.bmp *.webp)")
-        if path:
-            self.image_path = path
-            self.update_preview()
-
-    def update_preview(self):
-        if not self.image_path: return
-        self.scale = self.slider.value()
-        try:
-            pix = QPixmap(self.image_path)
-            if pix.isNull(): return
-            w = int(pix.width() * (self.scale / 100))
-            h = int(pix.height() * (self.scale / 100))
-            if w <= 0: w = 1
-            if h <= 0: h = 1
-            scaled_pix = pix.scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            
-            preview_w = min(400, self.preview_lbl.width())
-            preview_h = min(300, self.preview_lbl.height())
-            tiled = QPixmap(preview_w, preview_h)
-            from PySide6.QtGui import QPainter
-            painter = QPainter(tiled)
-            painter.drawTiledPixmap(0, 0, preview_w, preview_h, scaled_pix)
-            painter.end()
-            self.preview_lbl.setPixmap(tiled)
-        except Exception as e:
-            print(f"Preview Error: {e}")
+    def load_img_path(self, f):
+        self.path = f
+        self.preview.setText(f"已載入: {Path(f).name}")
 
 # -----------------------------------------------------------
-# 圖片填色 - 單一區塊控制面板
+# 元件：RegionControl (填色區塊)
 # -----------------------------------------------------------
 class RegionControl(QGroupBox):
-    settings_changed = Signal()
-
     def __init__(self, title, has_target_select=False, parent=None):
         super().__init__(title, parent)
-        self.has_target_select = has_target_select
-        self.current_fill_color = "#FFFFFF"
-        self.current_target_color = "#FFFFFF"
-        self.image_path = ""
-        self.image_scale = 100
+        self.has_target = has_target_select
+        self.sets = {'target_color':'#FFFFFF', 'fill_color':'#FFFFFF', 'fill_gradient':{}, 'fill_image_path':''}
         self.init_ui()
 
     def init_ui(self):
         layout = QVBoxLayout(self)
-        layout.setSpacing(12)
-
-        if self.has_target_select:
+        layout.setSpacing(8)
+        
+        if self.has_target:
             layout.addWidget(SelectableLabel("目標區塊:"))
-            self.combo_target = WhiteComboBox()
-            base_title = self.title().replace("區塊", "")
-            self.combo_target.addItems([f"全部「{base_title}」區塊", "指定色塊", "非指定色塊"])
-            self.combo_target.currentIndexChanged.connect(self.toggle_target_ui)
-            self.combo_target.currentIndexChanged.connect(self.settings_changed.emit)
-            layout.addWidget(self.combo_target)
+            self.cb_t = WhiteComboBox()
+            base = self.title().replace('區塊','')
+            self.cb_t.addItems([f"全部{base}", "指定色值", "非指定色值"])
+            self.cb_t.currentIndexChanged.connect(lambda i: self.w_tc.setVisible(i>0))
+            layout.addWidget(self.cb_t)
+            
+            self.w_tc = QWidget()
+            lt = QHBoxLayout(self.w_tc)
+            lt.setContentsMargins(0,0,0,0)
+            self.edt_tc = QLineEdit("#FFFFFF")
+            b = QPushButton("選")
+            b.setFixedWidth(30)
+            b.clicked.connect(lambda: self.pick(self.edt_tc))
+            lt.addWidget(SelectableLabel("色值:"))
+            lt.addWidget(self.edt_tc)
+            lt.addWidget(b)
+            layout.addWidget(self.w_tc)
+            self.w_tc.hide()
 
-            self.target_color_widget = QWidget()
-            tc_layout = QVBoxLayout(self.target_color_widget)
-            tc_layout.setContentsMargins(0,0,0,0)
-            
-            self.lbl_target_color = SelectableLabel("目標色塊色值:")
-            tc_layout.addWidget(self.lbl_target_color)
-
-            tc_row = QHBoxLayout()
-            self.edt_target_hex = QLineEdit()
-            self.edt_target_hex.setPlaceholderText("#FFFFFF")
-            self.edt_target_hex.setStyleSheet("font-size: 16px; font-weight: bold; color: #444; border: 1px solid #999; border-radius: 4px; padding: 4px;")
-            self.edt_target_hex.textChanged.connect(self.sync_target_color_from_hex)
-            self.edt_target_hex.editingFinished.connect(self.settings_changed.emit)
-            
-            self.target_color_box = QLabel()
-            self.target_color_box.setFixedSize(36, 36)
-            self.target_color_box.setStyleSheet("border: 1px solid #999; background-color: #FFFFFF; border-radius: 4px;")
-            self.target_color_box.setCursor(Qt.PointingHandCursor)
-            self.target_color_box.mousePressEvent = lambda e: self.pick_target_color()
-            
-            btn_pick = QPushButton("選色")
-            btn_pick.setFixedWidth(60)
-            btn_pick.clicked.connect(self.pick_target_color)
-            
-            tc_row.addWidget(self.edt_target_hex, 1)
-            tc_row.addWidget(self.target_color_box)
-            tc_row.addWidget(btn_pick)
-            tc_layout.addLayout(tc_row)
-            
-            self.target_color_widget.hide()
-            layout.addWidget(self.target_color_widget)
-            layout.addSpacing(4)
-
-        layout.addWidget(SelectableLabel("透明度設定:"))
-        self.combo_trans = WhiteComboBox()
-        self.combo_trans.addItems(["維持現狀", "改變透明度"])
-        self.combo_trans.currentIndexChanged.connect(self.toggle_trans_ui)
-        self.combo_trans.currentIndexChanged.connect(self.settings_changed.emit)
-        layout.addWidget(self.combo_trans)
-
-        self.trans_widget = QWidget()
-        trans_layout = QVBoxLayout(self.trans_widget)
-        trans_layout.setContentsMargins(0,0,0,0)
+        layout.addWidget(SelectableLabel("透明度:"))
+        self.cb_tr = WhiteComboBox()
+        self.cb_tr.addItems(["維持", "改變"])
+        self.cb_tr.currentIndexChanged.connect(lambda i: self.w_tr.setVisible(i==1))
+        layout.addWidget(self.cb_tr)
         
-        slider_row = QHBoxLayout()
-        self.slider_trans = QSlider(Qt.Horizontal)
-        self.slider_trans.setRange(0, 100)
-        self.slider_trans.setValue(100) 
-        self.slider_trans.setFixedWidth(120)
-        
-        self.spin_trans = QSpinBox()
-        self.spin_trans.setRange(0, 100)
-        self.spin_trans.setValue(100)
-        self.spin_trans.setSuffix("%")
-        
-        self.slider_trans.valueChanged.connect(self.spin_trans.setValue)
-        self.spin_trans.valueChanged.connect(self.slider_trans.setValue)
-        self.slider_trans.sliderReleased.connect(self.settings_changed.emit)
-        self.spin_trans.valueChanged.connect(self.settings_changed.emit)
-
-        slider_row.addWidget(self.slider_trans)
-        slider_row.addWidget(self.spin_trans)
-        slider_row.addStretch()
-        
-        lbl_hint = QLabel("0=全透, 100=不透")
-        lbl_hint.setStyleSheet("font-size: 12px; color: #666;")
-        slider_row.addWidget(lbl_hint)
-
-        trans_layout.addLayout(slider_row)
-        self.trans_widget.hide()
-        layout.addWidget(self.trans_widget)
-        layout.addSpacing(4)
+        self.w_tr = QWidget()
+        lr = QHBoxLayout(self.w_tr)
+        lr.setContentsMargins(0,0,0,0)
+        self.sl_tr = SliderInput(0, 100, 1, 100, "%")
+        lr.addWidget(self.sl_tr)
+        layout.addWidget(self.w_tr)
+        self.w_tr.hide()
 
         layout.addWidget(SelectableLabel("填充內容:"))
-        self.combo_mode = WhiteComboBox()
-        self.combo_mode.addItems(["維持現狀", "填充顏色", "填充圖片"])
-        self.combo_mode.currentIndexChanged.connect(self.toggle_mode_ui)
-        self.combo_mode.currentIndexChanged.connect(self.settings_changed.emit)
-        layout.addWidget(self.combo_mode)
+        self.cb_c = WhiteComboBox()
+        self.cb_c.addItems(["維持", "填充顏色", "填充漸層", "填充圖片"])
+        self.cb_c.currentIndexChanged.connect(lambda i: self.st_c.setCurrentIndex(i))
+        layout.addWidget(self.cb_c)
+        
+        self.st_c = QStackedWidget()
+        self.st_c.addWidget(QWidget()) # Index 0: Maintain
+        
+        # Color
+        pc = QWidget()
+        lc = QHBoxLayout(pc)
+        lc.setContentsMargins(0,0,0,0)
+        self.edt_fc = QLineEdit("#FFFFFF")
+        bfc = QPushButton("選")
+        bfc.setFixedWidth(30)
+        bfc.clicked.connect(lambda: self.pick(self.edt_fc))
+        lc.addWidget(SelectableLabel("色值:"))
+        lc.addWidget(self.edt_fc)
+        lc.addWidget(bfc)
+        self.st_c.addWidget(pc)
 
-        self.stack_mode = QStackedWidget()
-        self.stack_mode.addWidget(QWidget()) 
+        # Gradient
+        pg = QWidget()
+        lg = QVBoxLayout(pg)
+        lg.setContentsMargins(0,0,0,0)
+        self.sl_ga = SliderInput(0, 360, 1, 0, "°")
+        lg.addWidget(SelectableLabel("角度:"))
+        lg.addWidget(self.sl_ga)
+        lgs = QHBoxLayout()
+        self.edt_gs = QLineEdit("#000000")
+        self.edt_ge = QLineEdit("#FFFFFF")
+        bgs = QPushButton("起")
+        bgs.clicked.connect(lambda: self.pick(self.edt_gs))
+        bge = QPushButton("結")
+        bge.clicked.connect(lambda: self.pick(self.edt_ge))
+        lgs.addWidget(bgs)
+        lgs.addWidget(self.edt_gs)
+        lgs.addWidget(bge)
+        lgs.addWidget(self.edt_ge)
+        lg.addLayout(lgs)
+        self.st_c.addWidget(pg)
         
-        p1 = QWidget()
-        l1 = QVBoxLayout(p1); l1.setContentsMargins(0,0,0,0)
-        l1.addWidget(SelectableLabel("填充色值:"))
+        # Image
+        pi = QWidget()
+        li = QVBoxLayout(pi)
+        btn_img = QPushButton("選擇圖片")
+        btn_img.clicked.connect(self.pk_img)
+        li.addWidget(btn_img)
+        self.st_c.addWidget(pi)
         
-        c_row = QHBoxLayout()
-        self.edt_fill_hex = QLineEdit()
-        self.edt_fill_hex.setPlaceholderText("#FFFFFF")
-        self.edt_fill_hex.setStyleSheet("font-size: 16px; font-weight: bold; color: #444; border: 1px solid #999; border-radius: 4px; padding: 4px;")
-        self.edt_fill_hex.textChanged.connect(self.sync_fill_color_from_hex)
-        self.edt_fill_hex.editingFinished.connect(self.settings_changed.emit)
-        
-        self.fill_color_box = QLabel()
-        self.fill_color_box.setFixedSize(36, 36)
-        self.fill_color_box.setStyleSheet("border: 1px solid #999; background-color: #FFFFFF; border-radius: 4px;")
-        self.fill_color_box.setCursor(Qt.PointingHandCursor)
-        self.fill_color_box.mousePressEvent = lambda e: self.pick_fill_color()
-        
-        btn_set_fill = QPushButton("選色")
-        btn_set_fill.setFixedWidth(60)
-        btn_set_fill.clicked.connect(self.pick_fill_color)
-        
-        c_row.addWidget(self.edt_fill_hex, 1) 
-        c_row.addWidget(self.fill_color_box)
-        c_row.addWidget(btn_set_fill)
-        l1.addLayout(c_row)
-        self.stack_mode.addWidget(p1)
-
-        p2 = QWidget()
-        l2 = QVBoxLayout(p2); l2.setContentsMargins(0,0,0,0)
-        l2.addWidget(SelectableLabel("紋理圖片:"))
-        
-        img_row = QHBoxLayout()
-        self.lbl_img_status = SelectableLabel("尚未選擇")
-        self.lbl_img_status.setStyleSheet("color: #666; font-size: 13px; font-style: italic;")
-        btn_img = QPushButton("選擇...")
-        btn_img.clicked.connect(self.pick_texture)
-        img_row.addWidget(self.lbl_img_status, 1)
-        img_row.addWidget(btn_img)
-        l2.addLayout(img_row)
-        self.stack_mode.addWidget(p2)
-
-        layout.addWidget(self.stack_mode)
+        layout.addWidget(self.st_c)
         layout.addStretch()
 
-    def toggle_target_ui(self, idx):
-        self.target_color_widget.setVisible(idx > 0)
-        if idx == 1: self.lbl_target_color.setText("指定目標色值:")
-        elif idx == 2: self.lbl_target_color.setText("非目標色值 (排除此色):")
+    def pick(self, edt):
+        c = QColorDialog.getColor()
+        if c.isValid():
+            edt.setText(c.name().upper())
 
-    def toggle_trans_ui(self, idx):
-        self.trans_widget.setVisible(idx == 1)
-
-    def toggle_mode_ui(self, idx):
-        self.stack_mode.setCurrentIndex(idx)
-
-    def pick_target_color(self):
-        col = QColorDialog.getColor(QColor(self.current_target_color), self, "選擇顏色")
-        if col.isValid():
-            self.current_target_color = col.name().upper()
-            self.edt_target_hex.setText(self.current_target_color)
-            self.target_color_box.setStyleSheet(f"border: 1px solid #999; background-color: {self.current_target_color}; border-radius: 4px;")
-            self.settings_changed.emit()
-
-    def sync_target_color_from_hex(self, text):
-        if QColor.isValidColor(text):
-            self.target_color_box.setStyleSheet(f"border: 1px solid #999; background-color: {text}; border-radius: 4px;")
-            self.current_target_color = text
-
-    def pick_fill_color(self):
-        col = QColorDialog.getColor(QColor(self.current_fill_color), self, "選擇填充顏色")
-        if col.isValid():
-            self.current_fill_color = col.name().upper()
-            self.edt_fill_hex.setText(self.current_fill_color)
-            self.fill_color_box.setStyleSheet(f"border: 1px solid #999; background-color: {self.current_fill_color}; border-radius: 4px;")
-            self.settings_changed.emit()
-
-    def sync_fill_color_from_hex(self, text):
-        if QColor.isValidColor(text):
-            self.fill_color_box.setStyleSheet(f"border: 1px solid #999; background-color: {text}; border-radius: 4px;")
-            self.current_fill_color = text
-
-    def pick_texture(self):
-        dlg = TextureDialog(self)
-        if dlg.exec():
-            self.image_path = dlg.image_path
-            self.image_scale = dlg.scale
-            self.lbl_img_status.setText(f"{Path(self.image_path).name} ({self.image_scale}%)")
-            self.settings_changed.emit()
+    def pk_img(self):
+        f, _ = QFileDialog.getOpenFileName(self, "選圖")
+        if f:
+            self.sets['fill_image_path'] = f
 
     def get_settings(self):
         target_mode = 'all'
-        if self.has_target_select:
-            idx = self.combo_target.currentIndex()
+        if self.has_target:
+            idx = self.cb_t.currentIndex()
             if idx == 1: target_mode = 'specific'
             elif idx == 2: target_mode = 'non_specific'
-
+        
+        g_conf = {'start':self.edt_gs.text(), 'end':self.edt_ge.text(), 'angle':self.sl_ga.value()}
+        
         return {
-            'target_mode': target_mode,
-            'target_color': self.current_target_color,
-            'trans_mode': 'change' if self.combo_trans.currentIndex() == 1 else 'maintain',
-            'trans_val': self.slider_trans.value(),
-            'fill_mode': ['maintain', 'color', 'image'][self.combo_mode.currentIndex()],
-            'fill_color': self.current_fill_color,
-            'fill_image_path': self.image_path,
-            'fill_image_scale': self.image_scale
+            'target_mode': target_mode, 
+            'target_color': self.edt_tc.text(), 
+            'trans_mode': 'change' if self.cb_tr.currentIndex()==1 else 'maintain',
+            'trans_val': self.sl_tr.value(), 
+            'fill_mode': ['maintain','color','gradient','image'][self.cb_c.currentIndex()],
+            'fill_color': self.edt_fc.text(), 
+            'fill_gradient': g_conf,
+            'fill_image_path': self.sets['fill_image_path']
         }
 
 # -----------------------------------------------------------
-# 主視窗 (MainWindow)
+# 主視窗
 # -----------------------------------------------------------
 class MainWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
+    def __init__(self): 
+        super().__init__() 
         self.setWindowTitle("Python Media Batch Processor")
-        self.resize(1280, 850)
-        self.worker = None 
-        self.settings = QSettings("MyCompany", "ImageToolApp")
-        
-        self.active_pbar = None
-        self.active_plbl = None
-        
+        self.resize(1400, 950)
+        self.settings = QSettings("MediaBatcher", "AppConfig")
+        self.bg_sets = {} # Initialize dictionary for background settings
         self.init_ui()
 
     def init_ui(self):
-        main_widget = QWidget()
-        self.setCentralWidget(main_widget)
-        main_layout = QHBoxLayout(main_widget)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
-
-        # 1. 左側 Sidebar
-        self.sidebar = QWidget()
-        self.sidebar.setObjectName("SidebarFrame")
-        self.sidebar.setFixedWidth(260)
+        central = QWidget()
+        self.setCentralWidget(central)
+        ml = QHBoxLayout(central)
+        ml.setContentsMargins(0,0,0,0)
+        ml.setSpacing(0)
         
-        sb_layout = QVBoxLayout(self.sidebar)
-        sb_layout.setContentsMargins(0, 30, 0, 20)
-        sb_layout.setSpacing(8)
-
-        title = QLabel("Media Batcher")
-        title.setStyleSheet("color: #38bdf8; font-size: 24px; font-weight: bold; margin-left: 20px; margin-bottom: 5px;")
-        sb_layout.addWidget(title)
-        ver = QLabel("Python Port v1.0")
-        ver.setStyleSheet("color: #64748b; font-size: 13px; margin-left: 20px; margin-bottom: 20px;")
-        sb_layout.addWidget(ver)
-
-        self.btn_group = []
-        menu_items = [
-            ("圖片批次處理", "🖼️", 0),
-            ("影片銳利化", "🎥", 1),
-            ("檔名修改", "📝", 2),
-            ("Icon 生成", "📦", 3),
-            ("圖片填色", "🎨", 4),
-        ]
+        # 側邊欄
+        self.sb = QWidget()
+        self.sb.setFixedWidth(260)
+        self.sb.setObjectName("SidebarFrame")
+        sl = QVBoxLayout(self.sb)
+        sl.setContentsMargins(0,30,0,20)
+        sl.setSpacing(8)
         
-        for txt, icon, idx in menu_items:
-            btn = SidebarButton(txt, icon, idx)
-            btn.clicked.connect(self.switch_page)
-            sb_layout.addWidget(btn)
-            self.btn_group.append(btn)
+        lbl_title = SelectableLabel("Media Batcher", parent=self.sb)
+        lbl_title.setStyleSheet("color:#38bdf8;font-size:24px;font-weight:bold;margin-left:20px;")
+        sl.addWidget(lbl_title)
         
-        sb_layout.addStretch()
+        self.btns = []
+        items = [("修改檔名","📝",0), ("圖片處理","🖼️",1), ("智慧填色","🎨",2), ("影片銳利化","🎥",3), ("Icon 生成","📦",4)]
+        for t, i, idx in items:
+            b = SidebarButton(t, i, idx, self.sb)
+            b.clicked.connect(self.switch_page)
+            sl.addWidget(b)
+            self.btns.append(b)
         
-        copy = QLabel("© 2024 ImageTool")
-        copy.setStyleSheet("color: #475569; font-size: 12px; margin-left: 20px;")
-        sb_layout.addWidget(copy)
-
-        # 2. 右側內容區
-        right_frame = QWidget()
-        right_frame.setObjectName("RightFrame")
+        sl.addStretch()
+        ml.addWidget(self.sb)
         
-        rf_layout = QVBoxLayout(right_frame)
-        rf_layout.setContentsMargins(0,0,0,0)
-        rf_layout.setSpacing(0)
-
-        # Header
-        self.header = QWidget()
-        self.header.setFixedHeight(70)
-        self.header.setStyleSheet("background-color: white; border-bottom: 1px solid #cbd5e1;")
-        header_layout = QHBoxLayout(self.header)
-        header_layout.setContentsMargins(30, 0, 30, 0)
-        self.header_title = QLabel("功能標題")
-        self.header_title.setStyleSheet("font-size: 24px; font-weight: bold; color: #1e293b;")
-        header_layout.addWidget(self.header_title)
-        rf_layout.addWidget(self.header)
-
-        # Content
+        # 右側面板
+        right = QWidget()
+        right.setObjectName("RightFrame")
+        rl = QVBoxLayout(right)
+        rl.setContentsMargins(0,0,0,0)
+        
+        self.header = SelectableLabel("功能")
+        self.header.setFixedHeight(60)
+        self.header.setStyleSheet("background:white;padding-left:30px;font-size:24px;font-weight:bold;")
+        rl.addWidget(self.header)
+        
         self.stack = QStackedWidget()
-        self.stack.setObjectName("ScrollContent")
-        self.stack.addWidget(self.page_scaling_ui())
-        self.stack.addWidget(self.page_video_ui())
-        self.stack.addWidget(self.page_rename_ui())
-        self.stack.addWidget(self.page_multi_ui())
-        self.stack.addWidget(self.page_fill_ui()) 
-        
-        rf_layout.addWidget(self.stack, 1)
+        self.stack.addWidget(self.page_rename_ui())  # 0
+        self.stack.addWidget(self.page_scaling_ui()) # 1
+        self.stack.addWidget(self.page_fill_ui())    # 2
+        self.stack.addWidget(self.page_video_ui())   # 3
+        self.stack.addWidget(self.page_multi_ui())   # 4
+        rl.addWidget(self.stack, 1)
 
-        # Footer Status
-        status_bar = QWidget()
-        status_bar.setStyleSheet("background-color: #f1f5f9; border-top: 1px solid #cbd5e1;")
-        status_layout = QVBoxLayout(status_bar)
-        status_layout.setContentsMargins(20, 10, 20, 10)
+        # 底部狀態列 & Log
+        stat_bar = QWidget()
+        stat_bar.setObjectName("StatusBar")
+        sl = QHBoxLayout(stat_bar)
+        sl.setContentsMargins(20,10,20,10)
         
-        fp_row = QHBoxLayout()
-        self.lbl_current = SelectableLabel("準備就緒")
-        self.lbl_current.setStyleSheet("color: #475569; font-weight: 500;")
-        fp_row.addWidget(self.lbl_current)
-        fp_row.addStretch()
-        self.pbar_file = QProgressBar()
-        self.pbar_file.setObjectName("FileProgress") # 確保套用隱藏文字的樣式
-        self.pbar_file.setFixedWidth(200)
-        fp_row.addWidget(self.pbar_file)
-        status_layout.addLayout(fp_row)
-
-        # Log Area and Clear Button
-        log_header_layout = QHBoxLayout()
-        log_header_layout.addWidget(SelectableLabel("執行紀錄:"))
-        log_header_layout.addStretch()
+        v_info = QVBoxLayout()
+        h_inf = QHBoxLayout()
+        self.lbl_cur = SelectableLabel("準備就緒")
+        h_inf.addWidget(self.lbl_cur)
+        h_inf.addStretch()
         
-        btn_clear = QPushButton("清除 Log")
-        btn_clear.setObjectName("ClearLogBtn")
-        btn_clear.setCursor(Qt.PointingHandCursor)
-        btn_clear.clicked.connect(lambda: self.log_area.clear())
-        log_header_layout.addWidget(btn_clear)
+        self.pb_file = QProgressBar()
+        self.pb_file.setObjectName("FileProgress")
+        self.pb_file.setFixedWidth(200)
+        self.pb_file.setRange(0,100)
         
-        status_layout.addLayout(log_header_layout)
-
+        self.lbl_pct = SelectableLabel("0%")
+        h_inf.addWidget(self.pb_file)
+        h_inf.addWidget(self.lbl_pct)
+        v_info.addLayout(h_inf)
+        sl.addLayout(v_info)
+        
+        # Console + Clear Button
+        con_area = QHBoxLayout()
         self.log_area = QTextEdit()
-        self.log_area.setFixedHeight(80)
         self.log_area.setReadOnly(True)
-        self.log_area.setStyleSheet("border: 1px solid #cbd5e1; background: white; border-radius: 4px; font-family: Consolas; color: #333;")
-        status_layout.addWidget(self.log_area)
+        self.log_area.setFixedHeight(80)
+        self.log_area.setStyleSheet("border:1px solid #ccc;")
         
-        rf_layout.addWidget(status_bar)
-
-        main_layout.addWidget(self.sidebar)
-        main_layout.addWidget(right_frame)
-
+        btn_cls = QPushButton("清除 Log")
+        btn_cls.setObjectName("ClearLogBtn")
+        btn_cls.setCursor(Qt.PointingHandCursor)
+        btn_cls.clicked.connect(self.log_area.clear)
+        
+        con_area.addWidget(self.log_area, 1)
+        con_area.addWidget(btn_cls)
+        v_info.addLayout(con_area)
+        
+        rl.addWidget(stat_bar)
+        ml.addWidget(right)
         self.switch_page(0)
 
-    # --- Page Switching ---
-    def switch_page(self, index):
-        self.stack.setCurrentIndex(index)
-        titles = ["圖片批次處理", "影片銳利化", "檔名修改工具", "Icon 多尺寸生成", "智慧圖片填色"]
-        if 0 <= index < len(titles):
-            self.header_title.setText(titles[index])
-        
-        for btn in self.btn_group:
-            btn.set_selected(btn.index == index)
+    def switch_page(self, idx): 
+        self.stack.setCurrentIndex(idx)
+        for b in self.btns:
+            b.set_selected(b.index == idx)
+        self.header.setText(["修改檔名","圖片處理","智慧填色","影片銳利化","Icon 生成"][idx])
 
-    # --- Helpers ---
-    def _create_scroll_page(self, btn_text, on_click):
-        page = QWidget()
-        pl = QVBoxLayout(page)
-        pl.setContentsMargins(0,0,0,0)
+    def _create_scroll(self, click_func):
+        wrapper = QWidget()
+        wl = QVBoxLayout(wrapper)
+        wl.setContentsMargins(0,0,0,0)
         
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        content = QWidget()
-        content.setObjectName("ScrollContent")
-        cl = QVBoxLayout(content)
-        cl.setContentsMargins(40, 30, 40, 40)
-        cl.setSpacing(20)
-        scroll.setWidget(content)
-        pl.addWidget(scroll)
-
-        cl.addStretch()
+        sc = QScrollArea()
+        sc.setWidgetResizable(True)
+        sc.setFrameShape(QFrame.NoFrame)
+        ct = QWidget()
+        ct.setObjectName("ScrollContent")
+        self.cl = QVBoxLayout(ct)
+        self.cl.setContentsMargins(40,30,40,30)
+        self.cl.setSpacing(20)
+        sc.setWidget(ct)
+        wl.addWidget(sc, 1)
         
-        btn_area = QWidget()
-        bl = QHBoxLayout(btn_area)
-        bl.setContentsMargins(0, 20, 0, 0)
+        # 固定底部區塊
+        bot = QWidget()
+        bot.setStyleSheet("background:#e6e6e6;border-top:none;") # [修正] 移除上方細線
+        bl = QHBoxLayout(bot)
+        bl.setContentsMargins(40,15,40,15)
         
-        btn = QPushButton(btn_text)
+        btn = QPushButton("開始執行")
         btn.setObjectName("ExecBtn")
         btn.setCursor(Qt.PointingHandCursor)
-        if on_click: btn.clicked.connect(on_click)
+        btn.clicked.connect(click_func)
         
-        pbar = QProgressBar()
-        pbar.setObjectName("TotalProgress") # 套用樣式
-        pbar.setRange(0, 100)
-        pbar.setFixedHeight(18)
-        
-        # 總進度文字改由 ProgressBar 內建顯示 (QSS 中 text-align: center)
-        # 所以這裡不需要額外的 plbl，但為了相容你的邏輯保留它，可以設為隱藏
-        plbl = SelectableLabel("") 
-        plbl.setVisible(False)
+        pb = QProgressBar()
+        pb.setObjectName("TotalProgress")
+        pb.setRange(0,100)
         
         bl.addWidget(btn)
         bl.addSpacing(20)
         bl.addWidget(SelectableLabel("總進度:"))
-        bl.addWidget(pbar)
+        bl.addWidget(pb)
         
-        cl.addWidget(btn_area)
-        
-        return page, cl, pbar, plbl
+        wl.addWidget(bot)
+        return wrapper, self.cl, pb
 
-    # --- [待修復項目 1] 路徑設定 UI 復原 ---
-    def create_path_group(self, title="檔案來源", with_output=True):
-        grp = QGroupBox(title)
-        layout = QFormLayout()
-        layout.setVerticalSpacing(15)
+    # [修正] 復原路徑設定群組 (加入 setLayout)
+    def create_path_group(self, with_output=True):
+        g = QGroupBox("路徑")
+        l = QFormLayout()
         
-        # 1. Input Row
-        edt_in = QLineEdit()
-        edt_in.setPlaceholderText("請選擇檔案或資料夾...")
-        btn_in_dir = QPushButton("📂 資料夾")
-        btn_in_dir.clicked.connect(lambda: self.select_folder(edt_in))
-        btn_in_file = QPushButton("📄 檔案")
-        btn_in_file.clicked.connect(lambda: self.select_file(edt_in))
+        ri = QHBoxLayout()
+        ei = QLineEdit()
+        bd = QPushButton("資料夾")
+        bf = QPushButton("檔案")
+        dd = DragDropArea()
         
-        # 拖曳區塊
-        drop_in = DragDropArea()
-        drop_in.fileDropped.connect(edt_in.setText)
+        bd.clicked.connect(lambda: self.select_folder(ei))
+        bf.clicked.connect(lambda: self.select_file(ei))
+        dd.fileDropped.connect(ei.setText)
         
-        row_in = QHBoxLayout()
-        row_in.addWidget(edt_in)
-        row_in.addWidget(btn_in_dir)
-        row_in.addWidget(btn_in_file)
-        row_in.addWidget(drop_in)
+        ri.addWidget(ei)
+        ri.addWidget(bd)
+        ri.addWidget(bf)
+        ri.addWidget(dd)
+        l.addRow(SelectableLabel("輸入:"), ri)
         
-        layout.addRow(SelectableLabel("輸入路徑:"), row_in)
-
-        # 2. Output Row (Optional)
-        edt_out = None
+        eo = None
         if with_output:
-            edt_out = QLineEdit()
-            edt_out.setPlaceholderText("預設為來源資料夾")
-            btn_out = QPushButton("📂 選擇")
-            btn_out.clicked.connect(lambda: self.select_folder(edt_out))
+            ro = QHBoxLayout()
+            eo = QLineEdit()
+            bo = QPushButton("資料夾")
+            do = DragDropArea()
             
-            drop_out = DragDropArea()
-            drop_out.fileDropped.connect(edt_out.setText)
+            bo.clicked.connect(lambda: self.select_folder(eo))
+            do.fileDropped.connect(eo.setText)
             
-            row_out = QHBoxLayout()
-            row_out.addWidget(edt_out)
-            row_out.addWidget(btn_out)
-            row_out.addWidget(drop_out)
+            ro.addWidget(eo)
+            ro.addWidget(bo)
+            ro.addWidget(do)
+            l.addRow(SelectableLabel("輸出:"), ro)
             
-            layout.addRow(SelectableLabel("輸出位置:"), row_out)
-        
-        grp.setLayout(layout)
-        return grp, edt_in, edt_out
+        g.setLayout(l) # [修正] 加上 setLayout
+        return g, ei, eo
 
-    # -------------------------------------------------------------------------
-    # Page 0: Scaling / Batch Process
-    # -------------------------------------------------------------------------
-    def page_scaling_ui(self):
-        w, layout, self.sc_pbar, self.sc_plbl = self._create_scroll_page("開始處理圖片", self.run_scaling)
-        
-        # 恢復輸出路徑
-        grp_path, self.sc_in, self.sc_out = self.create_path_group(with_output=True)
-        layout.insertWidget(0, grp_path)
+    def select_folder(self, line_edit):
+        d = QFileDialog.getExistingDirectory(self, "選擇資料夾")
+        if d: line_edit.setText(d)
 
-        # 2. Main Options
-        grp_opt = QGroupBox("處理參數")
-        fl = QFormLayout()
-        
-        self.sc_mode = WhiteComboBox()
-        self.sc_mode.addItems(["Ratio (比例縮放)", "Fixed Width (固定寬度)", "Fixed Height (固定高度)"])
-        self.sc_stack = QStackedWidget()
-        
-        # Ratio Input
-        w1 = QWidget(); l1 = QHBoxLayout(w1); l1.setContentsMargins(0,0,0,0)
-        self.sc_val_ratio = QLineEdit("1.0"); l1.addWidget(self.sc_val_ratio); l1.addWidget(SelectableLabel("x (0.1 - 5.0)"))
-        self.sc_stack.addWidget(w1)
-        
-        # Width Input
-        w2 = QWidget(); l2 = QHBoxLayout(w2); l2.setContentsMargins(0,0,0,0)
-        self.sc_val_width = QLineEdit("1920"); l2.addWidget(self.sc_val_width); l2.addWidget(SelectableLabel("px"))
-        self.sc_stack.addWidget(w2)
+    def select_file(self, line_edit):
+        f, _ = QFileDialog.getOpenFileName(self, "選擇檔案")
+        if f: line_edit.setText(f)
 
-        # Height Input
-        w3 = QWidget(); l3 = QHBoxLayout(w3); l3.setContentsMargins(0,0,0,0)
-        self.sc_val_height = QLineEdit("1080"); l3.addWidget(self.sc_val_height); l3.addWidget(SelectableLabel("px"))
-        self.sc_stack.addWidget(w3)
-        
-        self.sc_mode.currentIndexChanged.connect(self.sc_stack.setCurrentIndex)
-        
-        # Enhancements
-        enhance_row = QHBoxLayout()
-        self.sc_sharpness = QLineEdit("1.0"); self.sc_sharpness.setFixedWidth(80)
-        self.sc_brightness = QLineEdit("1.0"); self.sc_brightness.setFixedWidth(80)
-        enhance_row.addWidget(SelectableLabel("銳利度:"))
-        enhance_row.addWidget(self.sc_sharpness)
-        enhance_row.addSpacing(20)
-        enhance_row.addWidget(SelectableLabel("亮度:"))
-        enhance_row.addWidget(self.sc_brightness)
-        enhance_row.addStretch()
-
-        # Meta info
-        self.sc_prefix = QLineEdit(); self.sc_postfix = QLineEdit()
-        self.sc_author = QLineEdit(self.settings.value("img_author", "")); self.sc_desc = QLineEdit()
-
-        fl.addRow(SelectableLabel("縮放模式:"), self.sc_mode)
-        fl.addRow(SelectableLabel("數值:"), self.sc_stack)
-        fl.addRow(SelectableLabel("影像增強:"), enhance_row)
-        fl.addRow(SelectableLabel("檔名前綴:"), self.sc_prefix)
-        fl.addRow(SelectableLabel("檔名後綴:"), self.sc_postfix)
-        fl.addRow(SelectableLabel("作者 Meta:"), self.sc_author)
-        fl.addRow(SelectableLabel("描述 Meta:"), self.sc_desc)
-        
-        grp_opt.setLayout(fl)
-        layout.insertWidget(1, grp_opt)
-        
-        # 3. Checkboxes (Grid Layout)
-        grp_chk = QGroupBox("進階選項")
-        gl = QGridLayout()
-        self.sc_rec = QCheckBox("包含子資料夾"); self.sc_rec.setChecked(True)
-        self.sc_jpg = QCheckBox("強制轉 JPG"); self.sc_jpg.setChecked(True)
-        self.sc_low = QCheckBox("副檔名轉小寫"); self.sc_low.setChecked(True)
-        self.sc_del = QCheckBox("刪除原始檔"); self.sc_del.setChecked(False)
-        self.sc_crop = QCheckBox("豆包圖裁切 (去除頂底雜訊)"); self.sc_crop.setChecked(False)
-        self.sc_meta = QCheckBox("移除 Metadata"); self.sc_meta.setChecked(False)
-        
-        gl.addWidget(self.sc_rec, 0, 0)
-        gl.addWidget(self.sc_jpg, 0, 1)
-        gl.addWidget(self.sc_low, 0, 2)
-        gl.addWidget(self.sc_del, 1, 0)
-        gl.addWidget(self.sc_crop, 1, 1)
-        gl.addWidget(self.sc_meta, 1, 2)
-        
-        grp_chk.setLayout(gl)
-        layout.insertWidget(2, grp_chk)
-        
-        return w
-    
-    def run_scaling(self):
-        idx = self.sc_mode.currentIndex()
-        mode = ['ratio', 'width', 'height'][idx]
-        try:
-            if idx == 0: val1 = float(self.sc_val_ratio.text())
-            elif idx == 1: val1 = float(self.sc_val_width.text())
-            else: val1 = float(self.sc_val_height.text())
-            sharp = float(self.sc_sharpness.text())
-            bright = float(self.sc_brightness.text())
-        except:
-            self.log("❌ 參數格式錯誤，請檢查數值")
-            return
-
-        self.settings.setValue("img_author", self.sc_author.text())
-
-        self.run_worker(logic.task_scaling, target_pbar=self.sc_pbar, target_plbl=self.sc_plbl, 
-                        input_path=self.sc_in.text(), output_path=self.sc_out.text(), 
-                        mode=mode, mode_value_1=val1, mode_value_2=0, 
-                        recursive=self.sc_rec.isChecked(), convert_jpg=self.sc_jpg.isChecked(), 
-                        lower_ext=self.sc_low.isChecked(), delete_original=self.sc_del.isChecked(), 
-                        prefix=self.sc_prefix.text(), postfix=self.sc_postfix.text(), 
-                        crop_doubao=self.sc_crop.isChecked(), 
-                        sharpen_factor=sharp, brightness_factor=bright, 
-                        remove_metadata=self.sc_meta.isChecked(), 
-                        author=self.sc_author.text(), description=self.sc_desc.text())
-
-    # -------------------------------------------------------------------------
-    # Page 1: Video Sharpen
-    # -------------------------------------------------------------------------
-    def page_video_ui(self):
-        w, layout, self.vd_pbar, self.vd_plbl = self._create_scroll_page("開始影片處理", self.run_video)
-        
-        # 恢復輸出路徑
-        grp_path, self.vd_in, self.vd_out = self.create_path_group(with_output=True)
-        layout.insertWidget(0, grp_path)
-
-        grp_sets = QGroupBox("銳利化設定")
-        fl = QFormLayout()
-        
-        # --- [待修復項目 5] 調整 Luma 選單寬度 ---
-        # 使用 QHBoxLayout 讓它們並排且寬度足夠，或者直接設 setMinimumWidth
-        row_luma = QHBoxLayout()
-        
-        self.vd_luma_size = WhiteComboBox()
-        self.vd_luma_size.addItems(["3", "5", "7", "9", "11", "13"])
-        self.vd_luma_size.setCurrentText("7")
-        self.vd_luma_size.setMinimumWidth(150) # 加寬
-        
-        self.vd_luma_amount = QLineEdit("1.0")
-        self.vd_luma_amount.setFixedWidth(100)
-        
-        row_luma.addWidget(SelectableLabel("Size:"))
-        row_luma.addWidget(self.vd_luma_size)
-        row_luma.addSpacing(20)
-        row_luma.addWidget(SelectableLabel("Amount:"))
-        row_luma.addWidget(self.vd_luma_amount)
-        row_luma.addStretch()
-
-        fl.addRow(SelectableLabel("銳化參數 (Luma):"), row_luma)
-        grp_sets.setLayout(fl)
-        layout.insertWidget(1, grp_sets)
-
-        grp_scale = QGroupBox("解析度與轉檔")
-        fl2 = QFormLayout()
-        self.vd_scale_mode = WhiteComboBox()
-        self.vd_scale_mode.addItems(["不改變", "1080p (Auto Fit)", "720p (Auto Fit)", "480p (Auto Fit)", "Scale Ratio"])
-        
-        self.vd_scale_val = QLineEdit("1.0")
-        self.vd_scale_val.setEnabled(False)
-        self.vd_scale_mode.currentIndexChanged.connect(lambda i: self.vd_scale_val.setEnabled(i == 4))
-
-        self.vd_prefix = QLineEdit(); self.vd_postfix = QLineEdit()
-        self.vd_author = QLineEdit(self.settings.value("vd_author", "")); self.vd_desc = QLineEdit()
-
-        fl2.addRow(SelectableLabel("解析度控制:"), self.vd_scale_mode)
-        fl2.addRow(SelectableLabel("縮放比例 (若選Ratio):"), self.vd_scale_val)
-        fl2.addRow(SelectableLabel("檔名前綴:"), self.vd_prefix)
-        fl2.addRow(SelectableLabel("檔名後綴:"), self.vd_postfix)
-        fl2.addRow(SelectableLabel("作者 Meta:"), self.vd_author)
-        fl2.addRow(SelectableLabel("描述 Meta:"), self.vd_desc)
-        grp_scale.setLayout(fl2)
-        layout.insertWidget(2, grp_scale)
-
-        grp_chk = QGroupBox("其他選項")
-        gl = QGridLayout()
-        self.vd_rec = QCheckBox("包含子資料夾"); self.vd_rec.setChecked(True)
-        self.vd_h264 = QCheckBox("強制轉 H.264 (mp4)"); self.vd_h264.setChecked(True)
-        self.vd_low = QCheckBox("副檔名轉小寫"); self.vd_low.setChecked(True)
-        self.vd_del = QCheckBox("刪除原始檔"); self.vd_del.setChecked(False)
-        self.vd_meta = QCheckBox("移除 Metadata"); self.vd_meta.setChecked(False)
-        
-        gl.addWidget(self.vd_rec, 0, 0)
-        gl.addWidget(self.vd_h264, 0, 1)
-        gl.addWidget(self.vd_low, 0, 2)
-        gl.addWidget(self.vd_del, 1, 0)
-        gl.addWidget(self.vd_meta, 1, 1)
-        
-        grp_chk.setLayout(gl)
-        layout.insertWidget(3, grp_chk)
-        
-        return w
-
-    def run_video(self):
-        try:
-            l_size = int(self.vd_luma_size.currentText())
-            l_amount = float(self.vd_luma_amount.text())
-            scale_idx = self.vd_scale_mode.currentIndex()
-            s_mode = 'none'
-            if scale_idx == 1: s_mode = 'hd1080'
-            elif scale_idx == 2: s_mode = 'hd720'
-            elif scale_idx == 3: s_mode = 'hd480'
-            elif scale_idx == 4: s_mode = 'ratio'
-            
-            s_val = float(self.vd_scale_val.text())
-        except:
-             self.log("❌ 參數格式錯誤")
-             return
-
-        self.settings.setValue("vd_author", self.vd_author.text())
-
-        self.run_worker(logic.task_video_sharpen, target_pbar=self.vd_pbar, target_plbl=self.vd_plbl,
-                       input_path=self.vd_in.text(), output_path=self.vd_out.text(), recursive=self.vd_rec.isChecked(), 
-                       lower_ext=self.vd_low.isChecked(), delete_original=self.vd_del.isChecked(), 
-                       prefix=self.vd_prefix.text(), postfix=self.vd_postfix.text(),
-                       luma_m_size=l_size, luma_amount=l_amount, 
-                       scale_mode=s_mode, scale_value=s_val, 
-                       convert_h264=self.vd_h264.isChecked(), 
-                       remove_metadata=self.vd_meta.isChecked(), 
-                       author=self.vd_author.text(), description=self.vd_desc.text())
-
-    # -------------------------------------------------------------------------
-    # Page 2: Rename
-    # -------------------------------------------------------------------------
+    # ------------------ Page 1: Rename ------------------
     def page_rename_ui(self):
-        w, layout, self.rn_pbar, self.rn_plbl = self._create_scroll_page("執行更名", self.run_rename)
+        p, l, self.rn_pb = self._create_scroll(self.run_rename)
+        gp, self.rn_i, _ = self.create_path_group(False)
+        l.addWidget(gp)
         
-        # 更名工具只需要輸入路徑 (with_output=False)
-        grp, self.rn_in, _ = self.create_path_group(title="目標資料夾", with_output=False)
+        gr = QGroupBox("規則")
+        lr = QFormLayout(gr)
+        self.ck_rp = QCheckBox("改前綴")
+        self.p1 = QLineEdit()
+        self.p2 = QLineEdit()
+        rp = QHBoxLayout()
+        rp.addWidget(self.p1)
+        rp.addWidget(SelectableLabel("->"))
+        rp.addWidget(self.p2)
         
-        layout.insertWidget(0, grp)
+        self.ck_rs = QCheckBox("改後綴")
+        self.s1 = QLineEdit()
+        self.s2 = QLineEdit()
+        rs = QHBoxLayout()
+        rs.addWidget(self.s1)
+        rs.addWidget(SelectableLabel("->"))
+        rs.addWidget(self.s2)
         
-        grp_act = QGroupBox("規則設定")
-        fl = QFormLayout()
+        lr.addRow(self.ck_rp, rp)
+        lr.addRow(self.ck_rs, rs)
+        l.addWidget(gr)
         
-        self.chk_prefix = QCheckBox("修改前綴")
-        row_pre = QHBoxLayout()
-        self.edt_old_prefix = QLineEdit(); self.edt_old_prefix.setPlaceholderText("舊前綴")
-        self.edt_new_prefix = QLineEdit(); self.edt_new_prefix.setPlaceholderText("新前綴")
-        row_pre.addWidget(self.edt_old_prefix); row_pre.addWidget(SelectableLabel("➜")); row_pre.addWidget(self.edt_new_prefix)
+        gm = QGroupBox("Meta (隱藏資訊)")
+        lm = QFormLayout(gm)
+        self.rn_rm = QCheckBox("移除 Meta(隱藏資訊)")
+        lm.addRow(self.rn_rm)
+        self.rn_au = QLineEdit(self.settings.value("rn_au",""))
+        self.rn_de = QLineEdit()
+        lm.addRow(SelectableLabel("作者:"), self.rn_au)
+        lm.addRow(SelectableLabel("描述:"), self.rn_de)
+        l.addWidget(gm)
         
-        self.chk_suffix = QCheckBox("修改後綴")
-        row_suf = QHBoxLayout()
-        self.edt_old_suffix = QLineEdit(); self.edt_old_suffix.setPlaceholderText("舊後綴")
-        self.edt_new_suffix = QLineEdit(); self.edt_new_suffix.setPlaceholderText("新後綴")
-        row_suf.addWidget(self.edt_old_suffix); row_suf.addWidget(SelectableLabel("➜")); row_suf.addWidget(self.edt_new_suffix)
-
-        fl.addRow(self.chk_prefix, row_pre)
-        fl.addRow(self.chk_suffix, row_suf)
-        grp_act.setLayout(fl)
-        layout.insertWidget(1, grp_act)
-        
-        self.rn_rec = QCheckBox("包含子資料夾"); self.rn_rec.setChecked(True)
-        layout.insertWidget(2, self.rn_rec)
-        
-        return w
+        self.rn_rec = QCheckBox("含子資料夾")
+        self.rn_rec.setChecked(True)
+        l.addWidget(self.rn_rec)
+        l.addStretch()
+        return p
 
     def run_rename(self):
-        self.run_worker(logic.task_rename_replace, target_pbar=self.rn_pbar, target_plbl=self.rn_plbl,
-                        input_path=self.rn_in.text(), recursive=self.rn_rec.isChecked(), 
-                        do_prefix=self.chk_prefix.isChecked(), old_prefix=self.edt_old_prefix.text(), new_prefix=self.edt_new_prefix.text(),
-                        do_suffix=self.chk_suffix.isChecked(), old_suffix=self.edt_old_suffix.text(), new_suffix=self.edt_new_suffix.text())
+        self.settings.setValue("rn_au", self.rn_au.text())
+        self.run_worker(logic.task_rename_replace, self.rn_pb, input_path=self.rn_i.text(), recursive=self.rn_rec.isChecked(), 
+                        do_prefix=self.ck_rp.isChecked(), old_prefix=self.p1.text(), new_prefix=self.p2.text(),
+                        do_suffix=self.ck_rs.isChecked(), old_suffix=self.s1.text(), new_suffix=self.s2.text(),
+                        remove_metadata=self.rn_rm.isChecked(), author=self.rn_au.text(), description=self.rn_de.text())
 
-    # -------------------------------------------------------------------------
-    # Page 3: Multi Res (Icon)
-    # -------------------------------------------------------------------------
-    def page_multi_ui(self):
-        w, layout, self.mt_pbar, self.mt_plbl = self._create_scroll_page("生成 Icons", self.run_multi)
+    # ------------------ Page 2: Scaling ------------------
+    def page_scaling_ui(self):
+        p,l,self.sc_pb = self._create_scroll(self.run_scaling)
+        gp, self.sc_i, self.sc_o = self.create_path_group()
+        l.addWidget(gp)
         
-        # 恢復輸出路徑
-        grp, self.mt_in, self.mt_out = self.create_path_group(with_output=True)
-        layout.insertWidget(0, grp)
+        go = QGroupBox("參數")
+        lo = QFormLayout(go)
+        self.sc_mode = WhiteComboBox()
+        self.sc_mode.addItems(["維持", "Ratio", "Fixed Width", "Fixed Height"])
+        self.sc_v1 = QLineEdit("1.0")
+        lo.addRow(SelectableLabel("模式:"), self.sc_mode)
+        lo.addRow(SelectableLabel("數值:"), self.sc_v1)
         
-        grp_opt = QGroupBox("設定")
-        fl = QFormLayout()
-        self.mt_ori = WhiteComboBox()
-        self.mt_ori.addItems(["水平基準 (以寬度為準)", "垂直基準 (以高度為準)"])
-        fl.addRow(SelectableLabel("縮放基準:"), self.mt_ori)
-        grp_opt.setLayout(fl)
-        layout.insertWidget(1, grp_opt)
+        self.sc_sh = SliderInput(0, 5, 0.1, 1.0)
+        lo.addRow(SelectableLabel("銳利度:"), self.sc_sh)
+        self.sc_br = SliderInput(0, 5, 0.1, 1.0)
+        lo.addRow(SelectableLabel("亮度:"), self.sc_br)
         
-        self.mt_rec = QCheckBox("包含子資料夾"); self.mt_rec.setChecked(True)
-        layout.insertWidget(2, self.mt_rec)
+        self.sc_pre = QLineEdit()
+        self.sc_post = QLineEdit()
+        lo.addRow(SelectableLabel("前綴:"), self.sc_pre)
+        lo.addRow(SelectableLabel("後綴:"), self.sc_post)
+        l.addWidget(go)
         
-        return w
+        gc = QGroupBox("選項")
+        lc = QGridLayout(gc)
+        self.sc_rec = QCheckBox("含子資料夾")
+        self.sc_rec.setChecked(True)
+        self.sc_jpg = QCheckBox("轉JPG")
+        self.sc_jpg.setChecked(True)
+        self.sc_low = QCheckBox("小寫副檔名")
+        self.sc_low.setChecked(True)
+        self.sc_del = QCheckBox("刪除原始")
+        self.sc_crop = QCheckBox("豆包裁切")
+        self.sc_meta = QCheckBox("移除 Meta(隱藏資訊)")
+        self.sc_au = QLineEdit(self.settings.value("sc_au",""))
+        self.sc_de = QLineEdit()
+        
+        lc.addWidget(self.sc_rec,0,0)
+        lc.addWidget(self.sc_jpg,0,1)
+        lc.addWidget(self.sc_low,0,2)
+        lc.addWidget(self.sc_del,1,0)
+        lc.addWidget(self.sc_crop,1,1)
+        lc.addWidget(self.sc_meta,1,2)
+        lo.addRow(SelectableLabel("作者:"), self.sc_au)
+        lo.addRow(SelectableLabel("描述:"), self.sc_de)
+        l.addWidget(gc)
+        l.addStretch()
+        return p
 
-    def run_multi(self):
-        self.run_worker(logic.task_multi_res, target_pbar=self.mt_pbar, target_plbl=self.mt_plbl,
-                        input_path=self.mt_in.text(), output_path=self.mt_out.text(), recursive=self.mt_rec.isChecked(),
-                        lower_ext=True, orientation='h' if self.mt_ori.currentIndex()==0 else 'v')
+    def run_scaling(self):
+        self.settings.setValue("sc_au", self.sc_au.text())
+        self.run_worker(logic.task_scaling, self.sc_pb, input_path=self.sc_i.text(), output_path=self.sc_o.text(),
+                        mode=['none','ratio','width','height'][self.sc_mode.currentIndex()], mode_value_1=float(self.sc_v1.text() or 0),
+                        recursive=self.sc_rec.isChecked(), convert_jpg=self.sc_jpg.isChecked(), lower_ext=self.sc_low.isChecked(),
+                        delete_original=self.sc_del.isChecked(), prefix=self.sc_pre.text(), postfix=self.sc_post.text(),
+                        crop_doubao=self.sc_crop.isChecked(), sharpen_factor=self.sc_sh.value(), brightness_factor=self.sc_br.value(),
+                        remove_metadata=self.sc_meta.isChecked(), author=self.sc_au.text(), description=self.sc_de.text())
 
-    # -------------------------------------------------------------------------
-    # Page 4: Image Fill (Advanced)
-    # -------------------------------------------------------------------------
+    # ------------------ Page 3: Smart Fill ------------------
     def page_fill_ui(self):
-        w, layout, self.fill_pbar, self.fill_plbl = self._create_scroll_page("開始填色處理", self.run_fill)
-        self.fill_page_widget = w
+        p,l,self.fill_pb = self._create_scroll(self.run_fill)
+        gp, self.fi, self.fo = self.create_path_group()
+        l.addWidget(gp)
+        
+        rr = QHBoxLayout()
+        self.rop = RegionControl("不透明區塊", True)
+        self.rtr = RegionControl("透明區塊")
+        self.rse = RegionControl("半透明區塊", True)
+        rr.addWidget(self.rop)
+        rr.addWidget(self.rtr)
+        rr.addWidget(self.rse)
+        l.insertLayout(1, rr)
+        
+        # 背景與裁切
+        adv = QHBoxLayout()
+        gb = QGroupBox("背景設定")
+        lb = QFormLayout(gb)
+        self.bg_mode = WhiteComboBox()
+        self.bg_mode.addItems(["疊加", "鏤空背景"])
+        self.bg_mat = WhiteComboBox()
+        self.bg_mat.addItems(["色塊", "漸層", "圖片"])
+        
+        self.bg_st = QStackedWidget()
+        
+        p1 = QWidget()
+        l1 = QHBoxLayout(p1)
+        self.bg_c = QLineEdit("#FFF")
+        b1 = QPushButton("選")
+        b1.clicked.connect(lambda: self.pick(self.bg_c))
+        l1.addWidget(self.bg_c)
+        l1.addWidget(b1)
+        self.bg_st.addWidget(p1)
+        
+        p2 = QWidget()
+        l2 = QVBoxLayout(p2)
+        self.bg_ga = SliderInput(0,360,1,0,"°")
+        self.bg_gs = QLineEdit("#000")
+        self.bg_ge = QLineEdit("#FFF")
+        b2 = QPushButton("起")
+        b2.clicked.connect(lambda:self.pick(self.bg_gs))
+        b3 = QPushButton("結")
+        b3.clicked.connect(lambda:self.pick(self.bg_ge))
+        h2 = QHBoxLayout()
+        h2.addWidget(b2)
+        h2.addWidget(self.bg_gs)
+        h2.addWidget(b3)
+        h2.addWidget(self.bg_ge)
+        l2.addWidget(self.bg_ga)
+        l2.addLayout(h2)
+        self.bg_st.addWidget(p2)
+        
+        p3 = QWidget()
+        l3 = QVBoxLayout(p3)
+        b4 = QPushButton("設定圖片")
+        b4.clicked.connect(self.set_bg_img)
+        l3.addWidget(b4)
+        self.bg_st.addWidget(p3)
+        
+        self.bg_mat.currentIndexChanged.connect(self.bg_st.setCurrentIndex)
+        
+        self.bg_cut = WhiteComboBox()
+        self.bg_cut.addItems(["不透明像素", "透明像素", "指定色值"])
+        self.bg_cc = QLineEdit("#FFF")
+        b5 = QPushButton("選")
+        b5.clicked.connect(lambda:self.pick(self.bg_cc))
+        h5 = QHBoxLayout()
+        h5.addWidget(self.bg_cut)
+        h5.addWidget(self.bg_cc)
+        h5.addWidget(b5)
+        
+        lb.addRow(SelectableLabel("模式:"), self.bg_mode)
+        lb.addRow(SelectableLabel("素材:"), self.bg_mat)
+        lb.addRow(SelectableLabel("設定:"), self.bg_st)
+        lb.addRow(SelectableLabel("鏤空:"), h5)
+        
+        adv.addWidget(gb, 1)
+        
+        gc = QGroupBox("裁切設定")
+        lc = QVBoxLayout(gc)
+        self.ck_shp = QCheckBox("形狀裁切")
+        self.cb_shp = WhiteComboBox()
+        self.cb_shp.hide()
+        self.ck_shp.toggled.connect(self.cb_shp.setVisible)
+        self.cb_shp.addItems(["圓形","正方形","正三角形","正五邊形","正六邊形","四角星形(圓角)","四角星形(尖角)","五角星形(圓角)","五角星形(尖角)","隨機雲狀(正圓內)","隨機雲狀"])
+        self.ck_trim = QCheckBox("貼合尺寸裁切")
+        self.ck_trim.setObjectName("PinkCheck")
+        lc.addWidget(self.ck_shp)
+        lc.addWidget(self.cb_shp)
+        lc.addWidget(self.ck_trim)
+        lc.addStretch()
+        adv.addWidget(gc, 1)
+        l.insertLayout(2, adv)
+        
+        # 輸出設定與預覽
+        out_row = QHBoxLayout()
+        gout = QGroupBox("輸出設定")
+        lout = QVBoxLayout(gout)
+        self.fi_fmt = WhiteComboBox()
+        self.fi_fmt.addItems(["png","jpg"])
+        lout.addWidget(SelectableLabel("格式:"))
+        lout.addWidget(self.fi_fmt)
+        
+        self.fill_rec = QCheckBox("含子資料夾")
+        lout.addWidget(self.fill_rec)
+        
+        self.fill_del = QCheckBox("刪除原始")
+        lout.addWidget(self.fill_del)
+        
+        out_row.addWidget(gout, 1)
+        prev = QLabel("預覽區塊")
+        prev.setAlignment(Qt.AlignCenter)
+        prev.setStyleSheet("border:2px dashed #999;background:#eee;min-height:100px;")
+        out_row.addWidget(prev, 1)
+        l.insertLayout(3, out_row)
+        
+        return p
 
-        # 1. Path (恢復輸出路徑)
-        grp_path, self.fill_in, self.fill_out = self.create_path_group("檔案路徑設定", with_output=True)
-        layout.insertWidget(0, grp_path)
+    def set_bg_img(self):
+        d = ImageEditorDialog(self)
+        if d.exec():
+            self.bg_sets['image_path'] = d.path
 
-        # 2. Region Controls
-        row_regions = QHBoxLayout()
-        row_regions.setSpacing(20)
-        
-        self.reg_opaque = RegionControl("不透明區塊", has_target_select=True)
-        self.reg_trans = RegionControl("透明區塊", has_target_select=False)
-        self.reg_semi = RegionControl("半透明區塊", has_target_select=True)
-        
-        row_regions.addWidget(self.reg_opaque)
-        row_regions.addWidget(self.reg_trans)
-        row_regions.addWidget(self.reg_semi)
-        
-        layout.insertLayout(1, row_regions)
-
-        # 3. Output Options
-        grp_opts = QGroupBox("輸出設定")
-        opt_layout = QHBoxLayout()
-        
-        self.fill_rec = QCheckBox("包含子資料夾")
-        self.fill_rec.setChecked(self.settings.value("fill_rec", False, type=bool))
-        
-        self.fill_del = QCheckBox("刪除原始圖片")
-        self.fill_del.setChecked(self.settings.value("fill_del", False, type=bool))
-        
-        self.fill_fmt = WhiteComboBox()
-        self.fill_fmt.addItems(["png", "jpg", "webp"])
-        self.fill_fmt.setCurrentText(self.settings.value("fill_fmt", "png", type=str))
-        self.fill_fmt.setFixedWidth(100)
-        
-        opt_layout.addWidget(self.fill_rec)
-        opt_layout.addSpacing(20)
-        opt_layout.addWidget(self.fill_del)
-        opt_layout.addStretch()
-        opt_layout.addWidget(SelectableLabel("輸出格式:"))
-        opt_layout.addWidget(self.fill_fmt)
-        
-        grp_opts.setLayout(opt_layout)
-        layout.insertWidget(2, grp_opts)
-
-        return w
+    def pick(self, e):
+        c = QColorDialog.getColor()
+        if c.isValid():
+            e.setText(c.name())
 
     def run_fill(self):
-        self.settings.setValue("fill_rec", self.fill_rec.isChecked())
-        self.settings.setValue("fill_del", self.fill_del.isChecked())
-        self.settings.setValue("fill_fmt", self.fill_fmt.currentText())
-
-        kwargs = {
-            'input_path': self.fill_in.text(),
-            'output_path': self.fill_out.text(),
-            'recursive': self.fill_rec.isChecked(),
-            'settings_opaque': self.reg_opaque.get_settings(),
-            'settings_trans': self.reg_trans.get_settings(),
-            'settings_semi': self.reg_semi.get_settings(),
-            'delete_original': self.fill_del.isChecked(),
-            'output_format': self.fill_fmt.currentText()
+        bg = {
+            'enabled': True, 
+            'mode': ['overlay','cutout'][self.bg_mode.currentIndex()], 
+            'material_type': ['color','gradient','image'][self.bg_mat.currentIndex()],
+            'color': self.bg_c.text(), 
+            'gradient': {'start':self.bg_gs.text(),'end':self.bg_ge.text(),'angle':self.bg_ga.value()},
+            'image_path': self.bg_sets.get('image_path',''), 
+            'cutout_target': ['opaque','transparent','color'][self.bg_cut.currentIndex()], 
+            'cutout_color': self.bg_cc.text()
         }
+        crop = {'shape': self.cb_shp.currentText() if self.ck_shp.isChecked() else '無', 'trim': self.ck_trim.isChecked()}
         
-        self.run_worker(logic.task_image_fill, target_pbar=self.fill_pbar, target_plbl=self.fill_plbl, **kwargs)
+        self.run_worker(logic.task_image_fill, self.fill_pb, input_path=self.fi.text(), output_path=self.fo.text(), 
+                        recursive=self.fill_rec.isChecked(),
+                        settings_opaque=self.rop.get_settings(), 
+                        settings_trans=self.rtr.get_settings(), 
+                        settings_semi=self.rse.get_settings(),
+                        bg_settings=bg, crop_settings=crop, delete_original=self.fill_del.isChecked(), 
+                        output_format=self.fi_fmt.currentText())
 
-    # -------------------------------------------------------------------------
-    # Common Helpers
-    # -------------------------------------------------------------------------
-    def select_folder(self, edt):
-        d = QFileDialog.getExistingDirectory(self, "選擇資料夾")
-        if d: edt.setText(d)
+    # ------------------ Page 4: Video ------------------
+    def page_video_ui(self):
+        p,l,self.vd_pb = self._create_scroll(self.run_video)
+        gp, self.vi, self.vo = self.create_path_group()
+        l.addWidget(gp)
+        
+        gs = QGroupBox("參數")
+        ls = QFormLayout(gs)
+        self.vd_ls = SliderInput(3, 13, 2, 7)
+        ls.addRow(SelectableLabel("Luma Size (3-13):"), self.vd_ls)
+        self.vd_la = SliderInput(0, 5, 0.1, 1.0)
+        ls.addRow(SelectableLabel("Luma Amount:"), self.vd_la)
+        self.vd_pre = QLineEdit()
+        self.vd_post = QLineEdit()
+        ls.addRow(SelectableLabel("前綴:"), self.vd_pre)
+        ls.addRow(SelectableLabel("後綴:"), self.vd_post)
+        l.addWidget(gs)
+        
+        gr = QGroupBox("輸出")
+        lr = QFormLayout(gr)
+        self.vd_sm = WhiteComboBox()
+        self.vd_sm.addItems(["None","1080p","720p","Ratio"])
+        self.vd_sv = SliderInput(0.1, 5.0, 0.1, 1.0)
+        lr.addRow(SelectableLabel("縮放模式:"), self.vd_sm)
+        lr.addRow(SelectableLabel("比例 (Ratio):"), self.vd_sv)
+        l.addWidget(gr)
+        
+        gc = QGroupBox("選項")
+        lc = QGridLayout(gc)
+        self.vd_rec = QCheckBox("含子資料夾")
+        self.vd_rec.setChecked(True)
+        self.vd_mp4 = QCheckBox("轉MP4")
+        self.vd_mp4.setChecked(True)
+        self.vd_low = QCheckBox("小寫")
+        self.vd_low.setChecked(True)
+        self.vd_del = QCheckBox("刪除原始")
+        self.vd_meta = QCheckBox("移除 Meta(隱藏資訊)")
+        self.vd_au = QLineEdit(self.settings.value("vd_au",""))
+        self.vd_de = QLineEdit()
+        
+        lc.addWidget(self.vd_rec,0,0)
+        lc.addWidget(self.vd_mp4,0,1)
+        lc.addWidget(self.vd_low,0,2)
+        lc.addWidget(self.vd_del,1,0)
+        lc.addWidget(self.vd_meta,1,1)
+        lr.addRow(SelectableLabel("作者:"), self.vd_au)
+        lr.addRow(SelectableLabel("描述:"), self.vd_de)
+        l.addWidget(gc)
+        l.addStretch()
+        return p
     
-    def select_file(self, edt):
-        f, _ = QFileDialog.getOpenFileName(self, "選擇檔案", "", "Images (*.png *.jpg *.jpeg *.webp);;Video (*.mp4 *.mov *.mkv *.avi);;All (*)")
-        if f: edt.setText(f)
+    def run_video(self):
+        self.settings.setValue("vd_au", self.vd_au.text())
+        sm = ['none','hd1080','hd720','ratio'][self.vd_sm.currentIndex()]
+        self.run_worker(logic.task_video_sharpen, self.vd_pb, input_path=self.vi.text(), output_path=self.vo.text(), recursive=self.vd_rec.isChecked(),
+                        lower_ext=self.vd_low.isChecked(), delete_original=self.vd_del.isChecked(), prefix=self.vd_pre.text(), postfix=self.vd_post.text(),
+                        luma_m_size=int(self.vd_ls.value()), luma_amount=self.vd_la.value(), scale_mode=sm, scale_value=self.vd_sv.value(),
+                        convert_h264=self.vd_mp4.isChecked(), remove_metadata=self.vd_meta.isChecked(), author=self.vd_au.text(), description=self.vd_de.text())
 
-    def log(self, msg):
-        t = datetime.now().strftime("%H:%M:%S")
-        self.log_area.append(f"[{t}] {msg}")
+    # ------------------ Page 5: Icon ------------------
+    def page_multi_ui(self):
+        p,l,self.mt_pb = self._create_scroll(self.run_multi)
+        gp, self.mi, self.mo = self.create_path_group()
+        l.addWidget(gp)
+        opt = QGroupBox("設定")
+        lo = QFormLayout(opt)
+        self.mt_ori = WhiteComboBox()
+        self.mt_ori.addItems(["水平","垂直"])
+        lo.addRow(SelectableLabel("基準:"), self.mt_ori)
+        l.addWidget(opt)
+        self.mt_rec = QCheckBox("含子資料夾")
+        self.mt_rec.setChecked(True)
+        l.addWidget(self.mt_rec)
+        l.addStretch()
+        return p
 
-    # --- [待修復項目 4] 修復 Worker 信號連接 (確保 current_file 與 pbar_file 會動) ---
-    def run_worker(self, func, target_pbar, target_plbl, **kwargs):
+    def run_multi(self):
+        self.run_worker(logic.task_multi_res, self.mt_pb, input_path=self.mi.text(), output_path=self.mo.text(), recursive=self.mt_rec.isChecked(), lower_ext=True, orientation='h' if self.mt_ori.currentIndex()==0 else 'v')
+
+    # ------------------ Worker Helper ------------------
+    def run_worker(self, func, pb, **kwargs):
         if not kwargs.get('input_path'):
-            self.log("❌ 請選擇輸入路徑")
+            self.log_area.append("❌ 路徑未設定")
             return
-        
-        self.active_pbar = target_pbar
-        self.active_plbl = target_plbl
-        
+        self.active_pb = pb
         self.worker = Worker(func, **kwargs)
-        self.worker.log_signal.connect(self.log)
-        
-        # 總進度
-        self.worker.progress_signal.connect(lambda v: self.active_pbar.setValue(v) if self.active_pbar else None)
-        
-        # 單一檔案進度 (更新底部狀態列)
-        self.worker.file_progress_signal.connect(lambda v: self.pbar_file.setValue(v))
-        
-        # 當前檔名 (更新底部狀態列)
-        self.worker.current_file_signal.connect(lambda s: self.lbl_current.setText(f"處理中: {s}"))
-        
-        self.worker.finished_signal.connect(lambda: self.log("✅ 任務完成"))
+        self.worker.log_signal.connect(self.log_area.append)
+        self.worker.progress_signal.connect(pb.setValue)
+        self.worker.current_file_signal.connect(lambda s: self.lbl_cur.setText(f"處理中: {s}"))
+        self.worker.file_progress_signal.connect(lambda v: (self.pb_file.setValue(v), self.lbl_pct.setText(f"{v}%")))
+        self.worker.finished_signal.connect(lambda: self.log_area.append("✅ 完成"))
         self.worker.start()
