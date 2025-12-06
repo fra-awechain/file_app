@@ -40,20 +40,26 @@ QPushButton:pressed {
     background-color: #dae0e5;
 }
 
-/* [修正 1] 開始執行按鈕：移除 border 以強制顯示背景色 */
-QPushButton#ExecBtn {
+/* 底部容器背景 */
+QWidget#BotContainer {
+    background-color: #e6e6e6;
+    border-top: none;
+}
+
+/* [修正] 開始執行按鈕 - 指定父層 ID 確保優先權 */
+QWidget#BotContainer QPushButton#ExecBtn {
     background-color: #2563eb; 
     color: white;
-    border: none; /* 關鍵：移除邊框以確保背景色生效 */
+    border: none;
     border-radius: 6px;
     font-size: 16px;
     padding: 10px 24px;
     font-weight: bold;
 }
-QPushButton#ExecBtn:hover {
+QWidget#BotContainer QPushButton#ExecBtn:hover {
     background-color: #1d4ed8;
 }
-QPushButton#ExecBtn:pressed {
+QWidget#BotContainer QPushButton#ExecBtn:pressed {
     background-color: #1e40af;
 }
 
@@ -115,7 +121,7 @@ QCheckBox#PinkCheck {
     border: 1px solid #fbcfe8;
 }
 
-/* 滑桿軌道樣式 (增加灰色底色) */
+/* 滑桿軌道樣式 */
 QSlider::groove:horizontal {
     border: 1px solid #ccc;
     height: 6px;
@@ -219,7 +225,7 @@ QLabel#DragDrop:hover {
     font-weight: bold;
 }
 
-/* 底部狀態區塊 (移除上方線條) */
+/* 底部狀態區塊 */
 QWidget#StatusBar {
     background-color: rgba(223, 212, 186, 0.95);
     border-top: none; 
