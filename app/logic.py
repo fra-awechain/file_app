@@ -410,25 +410,29 @@ def task_rename_replace(log_callback, progress_callback, current_file_callback, 
             suffix = fp.suffix
             new_stem = stem
             
-            # [修正點] 如果 old_prefix 為空，則視為直接添加
+            # [修正 2] 前綴邏輯：如果 old_prefix 為空，強制添加新前綴
             if do_prefix:
                 if not old_prefix:
                     new_stem = new_prefix + new_stem
                 elif new_stem.startswith(old_prefix):
                     new_stem = new_prefix + new_stem[len(old_prefix):]
             
-            if do_suffix and old_suffix and new_stem.endswith(old_suffix):
-                new_stem = new_stem[:-len(old_suffix)] + new_suffix
+            # 後綴邏輯：如果 old_suffix 為空，強制添加新後綴
+            if do_suffix:
+                if not old_suffix:
+                    new_stem = new_stem + new_suffix
+                elif new_stem.endswith(old_suffix):
+                    new_stem = new_stem[:-len(old_suffix)] + new_suffix
                 
             new_path = parent / f"{new_stem}{suffix}"
             
-            # Rename first
+            # 執行更名
             if new_path != fp:
                 fp.rename(new_path)
                 log_callback(f"✏️ {fp.name} -> {new_path.name}")
                 fp = new_path
                 
-            # Meta handling
+            # Meta 處理
             if remove_metadata or author or description:
                 is_img = suffix.lower() in ['.jpg','.png','.webp']
                 is_vid = suffix.lower() in ['.mp4','.mov','.mkv']

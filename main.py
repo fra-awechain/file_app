@@ -40,25 +40,21 @@ QPushButton:pressed {
     background-color: #dae0e5;
 }
 
-/* [關鍵修復] 開始執行按鈕 (固定底部，藍色底色) */
+/* [修正 1] 開始執行按鈕：移除 border 以強制顯示背景色 */
 QPushButton#ExecBtn {
-    background: #2563eb; /* 使用 background 簡寫確保覆蓋 */
     background-color: #2563eb; 
     color: white;
-    border: 1px solid #2563eb;
-    border-style: solid; /* 強制邊框樣式 */
+    border: none; /* 關鍵：移除邊框以確保背景色生效 */
+    border-radius: 6px;
     font-size: 16px;
     padding: 10px 24px;
-    border-radius: 6px;
     font-weight: bold;
 }
 QPushButton#ExecBtn:hover {
     background-color: #1d4ed8;
-    border-color: #1d4ed8;
 }
 QPushButton#ExecBtn:pressed {
     background-color: #1e40af;
-    border-color: #1e40af;
 }
 
 /* 清除 Log 按鈕 (深灰底) */

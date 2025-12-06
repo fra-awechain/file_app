@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QFormLayout, QComboBox, QSplitter, QScrollArea, QFrame, 
                                QProgressBar, QColorDialog, QDialog, QSpinBox, QDoubleSpinBox, QGridLayout, QSlider)
 from PySide6.QtCore import Qt, QSettings, Signal
-from PySide6.QtGui import QDragEnterEvent, QDropEvent
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QTextCursor
 from app.workers import Worker
 import app.logic as logic
 from pathlib import Path
@@ -411,7 +411,8 @@ class MainWindow(QMainWindow):
         self.log_area = QTextEdit()
         self.log_area.setReadOnly(True)
         self.log_area.setFixedHeight(80)
-        self.log_area.setStyleSheet("border:1px solid #ccc;")
+        # [修正 3] 樣式改為白字黑底
+        self.log_area.setStyleSheet("background-color: #1e1e1e; color: #f0f0f0; border:1px solid #555; font-family: Consolas;")
         
         btn_cls = QPushButton("清除 Log")
         btn_cls.setObjectName("ClearLogBtn")
@@ -516,6 +517,16 @@ class MainWindow(QMainWindow):
     def select_file(self, line_edit):
         f, _ = QFileDialog.getOpenFileName(self, "選擇檔案")
         if f: line_edit.setText(f)
+
+    # [修正 4] Log 倒序顯示：插入最上方
+    def log(self, msg):
+        from datetime import datetime
+        t = datetime.now().strftime("%H:%M:%S")
+        txt = f"[{t}] {msg}\n"
+        cursor = self.log_area.textCursor()
+        cursor.movePosition(QTextCursor.Start)
+        cursor.insertText(txt)
+        self.log_area.setTextCursor(cursor)
 
     # ------------------ Page 1: Rename ------------------
     def page_rename_ui(self):
@@ -860,13 +871,13 @@ class MainWindow(QMainWindow):
     # ------------------ Worker Helper ------------------
     def run_worker(self, func, pb, **kwargs):
         if not kwargs.get('input_path'):
-            self.log_area.append("❌ 路徑未設定")
+            self.log("❌ 路徑未設定")
             return
         self.active_pb = pb
         self.worker = Worker(func, **kwargs)
-        self.worker.log_signal.connect(self.log_area.append)
+        self.worker.log_signal.connect(self.log) # 這裡連接到已經修正的倒序 log 函式
         self.worker.progress_signal.connect(pb.setValue)
         self.worker.current_file_signal.connect(lambda s: self.lbl_cur.setText(f"處理中: {s}"))
         self.worker.file_progress_signal.connect(lambda v: (self.pb_file.setValue(v), self.lbl_pct.setText(f"{v}%")))
-        self.worker.finished_signal.connect(lambda: self.log_area.append("✅ 完成"))
+        self.worker.finished_signal.connect(lambda: self.log("✅ 完成"))
         self.worker.start()
