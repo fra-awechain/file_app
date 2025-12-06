@@ -67,19 +67,16 @@ def create_shape_mask(size, shape_type):
 
 def create_gradient_image(size, start_hex, end_hex, angle):
     w, h = size
-    # 建立足夠大的畫布以進行旋轉裁切
     diag = int(math.sqrt(w**2 + h**2))
     base = Image.new('RGBA', (diag, diag), start_hex)
     top = Image.new('RGBA', (diag, diag), end_hex)
     mask = Image.new('L', (diag, diag))
     draw = ImageDraw.Draw(mask)
     
-    # 繪製垂直漸層
     for y in range(diag):
         val = int(255 * (y / diag))
         draw.line([(0, y), (diag, y)], fill=val)
     
-    # 旋轉並裁切
     mask = mask.rotate(angle)
     res = Image.composite(top, base, mask)
     
@@ -110,7 +107,6 @@ def process_single_image_fill(img, opaque_sets, trans_sets, semi_sets, bg_sets, 
     if img.mode != 'RGBA':
         img = img.convert('RGBA')
     w, h = img.size
-    
     r, g, b, a = img.split()
     
     # 1. 建立區域 Mask
@@ -120,11 +116,9 @@ def process_single_image_fill(img, opaque_sets, trans_sets, semi_sets, bg_sets, 
     
     final = img.copy()
     
-    # 2. 處理填色 (Opaque, Trans, Semi)
+    # 2. 處理填色
     def proc_layer(base, region_mask, s):
         if not s or not region_mask.getbbox(): return base
-        
-        # Target Filtering
         tm = s.get('target_mode')
         final_mask = region_mask
         if tm in ['specific', 'non_specific']:
@@ -134,7 +128,6 @@ def process_single_image_fill(img, opaque_sets, trans_sets, semi_sets, bg_sets, 
             
         if not final_mask.getbbox(): return base
         
-        # Fill Content
         fill_layer = None
         fmod = s.get('fill_mode')
         if fmod == 'color':
@@ -152,14 +145,12 @@ def process_single_image_fill(img, opaque_sets, trans_sets, semi_sets, bg_sets, 
         if fill_layer:
             base = Image.composite(fill_layer, base, final_mask)
             
-        # Transparency
         if s.get('trans_mode') == 'change':
             alpha_val = int(255 * (s.get('trans_val', 100) / 100.0))
             new_a = Image.new('L', (w,h), alpha_val)
             curr_a = base.split()[3]
             comp_a = Image.composite(new_a, curr_a, final_mask)
             base.putalpha(comp_a)
-            
         return base
 
     final = proc_layer(final, mask_op, opaque_sets)
@@ -183,7 +174,7 @@ def process_single_image_fill(img, opaque_sets, trans_sets, semi_sets, bg_sets, 
             except: pass
             
         if bg_layer:
-            mode = bg_sets.get('mode') # overlay, cutout
+            mode = bg_sets.get('mode')
             if mode == 'overlay':
                 bg_layer.paste(final, (0,0), final)
                 final = bg_layer
@@ -248,20 +239,17 @@ def task_image_fill(log_callback, progress_callback, current_file_callback, file
             
             with Image.open(fp) as img:
                 res = process_single_image_fill(img, settings_opaque, settings_trans, settings_semi, bg_settings, crop_settings)
-                
                 fmt = output_format.upper()
                 if fmt == 'JPG':
                     bg = Image.new("RGB", res.size, (255,255,255))
                     bg.paste(res, mask=res.split()[3])
                     res = bg
                     fmt = 'JPEG'
-                    
                 res.save(out_file, format=fmt, quality=95)
                 log_callback(f"🎨 完成: {fp.name}")
             
             if delete_original and fp.resolve() != out_file.resolve():
                 os.remove(fp)
-                
             file_progress_callback(100)
         except Exception as e:
             log_callback(f"❌ {fp.name}: {e}")
@@ -299,15 +287,12 @@ def task_scaling(log_callback, progress_callback, current_file_callback, file_pr
                 if remove_metadata:
                     img.info.clear()
                     if 'exif' in img.info: del img.info['exif']
-                
                 if convert_jpg and img.mode in ('RGBA', 'LA', 'P'):
                     img = img.convert('RGB')
-                
                 if crop_doubao:
                     w, h = img.size
                     sw, sh = w - 320, h - 110
-                    if sw > 0 and sh > 0:
-                        img = img.crop((0, 0, sw, sh)) 
+                    if sw > 0 and sh > 0: img = img.crop((0, 0, sw, sh)) 
 
                 w, h = img.size
                 nw, nh = w, h
@@ -337,10 +322,8 @@ def task_scaling(log_callback, progress_callback, current_file_callback, file_pr
                     save_k['pnginfo'] = meta
                     
                 img.save(dest / new_name, **save_k)
-                
             if delete_original and fp.resolve() != (dest/new_name).resolve():
                 os.remove(fp)
-                
             file_progress_callback(100)
         except Exception as e:
             log_callback(f"❌ {fp.name}: {e}")
@@ -357,7 +340,6 @@ def task_video_sharpen(log_callback, progress_callback, current_file_callback, f
     if not is_ffmpeg_installed():
         log_callback("❌ 錯誤：找不到 FFmpeg")
         return
-        
     log_callback(f"🚀 [Video] 開始")
     files = get_files(input_path, recursive, file_types='video')
     total_dur = sum([max(get_video_duration(f), 1.0) for f in files])
@@ -380,7 +362,6 @@ def task_video_sharpen(log_callback, progress_callback, current_file_callback, f
             filters = []
             if luma_amount > 0:
                 filters.append(f"unsharp={luma_m_size}:{luma_m_size}:{luma_amount}")
-            
             if scale_mode == 'ratio' and scale_value != 1:
                 filters.append(f"scale=iw*{scale_value}:-2")
             elif scale_mode in ['hd1080', 'hd720']:
@@ -388,40 +369,26 @@ def task_video_sharpen(log_callback, progress_callback, current_file_callback, f
                 filters.append(f"scale='if(lt(iw,ih),{px},-2)':'if(lt(iw,ih),-2,{px})'")
                 
             cmd = ["ffmpeg", "-y", "-i", str(fp)]
-            
-            if filters:
-                cmd.extend(["-vf", ",".join(filters)])
-                
-            if filters or convert_h264:
-                cmd.extend(["-c:v", "libx264", "-crf", "23"])
-            else:
-                cmd.extend(["-c:v", "copy"])
-                
+            if filters: cmd.extend(["-vf", ",".join(filters)])
+            if filters or convert_h264: cmd.extend(["-c:v", "libx264", "-crf", "23"])
+            else: cmd.extend(["-c:v", "copy"])
             cmd.extend(["-c:a", "copy"])
             
-            if remove_metadata:
-                cmd.extend(["-map_metadata", "-1"])
-            if author:
-                cmd.extend(["-metadata", f"artist={author}", "-metadata", f"author={author}"])
-            if description:
-                cmd.extend(["-metadata", f"description={description}", "-metadata", f"comment={description}"])
-                
+            if remove_metadata: cmd.extend(["-map_metadata", "-1"])
+            if author: cmd.extend(["-metadata", f"artist={author}", "-metadata", f"author={author}"])
+            if description: cmd.extend(["-metadata", f"description={description}", "-metadata", f"comment={description}"])
             cmd.append(str(out_file))
             
             process = subprocess.Popen(cmd, stderr=subprocess.PIPE)
             process.wait()
-            
             if process.returncode == 0 and delete_original and fp.resolve() != out_file.resolve():
                 os.remove(fp)
-                
             dur = max(get_video_duration(fp), 1)
             acc_dur += dur
             progress_callback(int((acc_dur/total_dur)*100))
             file_progress_callback(100)
-            
         except Exception as e:
             log_callback(f"❌ {fp.name}: {e}")
-            
     log_callback("🏁 結束")
 
 def task_rename_replace(log_callback, progress_callback, current_file_callback, file_progress_callback,
@@ -443,14 +410,13 @@ def task_rename_replace(log_callback, progress_callback, current_file_callback, 
             suffix = fp.suffix
             new_stem = stem
             
-            # Prefix Logic: 如果 old_prefix 為空，則直接添加前綴
+            # [修正點] 如果 old_prefix 為空，則視為直接添加
             if do_prefix:
                 if not old_prefix:
                     new_stem = new_prefix + new_stem
                 elif new_stem.startswith(old_prefix):
                     new_stem = new_prefix + new_stem[len(old_prefix):]
             
-            # Suffix Logic
             if do_suffix and old_suffix and new_stem.endswith(old_suffix):
                 new_stem = new_stem[:-len(old_suffix)] + new_suffix
                 
@@ -460,20 +426,18 @@ def task_rename_replace(log_callback, progress_callback, current_file_callback, 
             if new_path != fp:
                 fp.rename(new_path)
                 log_callback(f"✏️ {fp.name} -> {new_path.name}")
-                fp = new_path # Update ref
+                fp = new_path
                 
             # Meta handling
             if remove_metadata or author or description:
                 is_img = suffix.lower() in ['.jpg','.png','.webp']
                 is_vid = suffix.lower() in ['.mp4','.mov','.mkv']
-                
                 if is_img:
                     temp_p = fp.with_name(f"temp_{fp.name}")
                     with Image.open(fp) as img:
                         if remove_metadata:
                             img.info.clear()
                             if 'exif' in img.info: del img.info['exif']
-                            
                         save_k = {}
                         if suffix.lower() == '.png' and (author or description):
                             from PIL.PngImagePlugin import PngInfo
@@ -481,23 +445,17 @@ def task_rename_replace(log_callback, progress_callback, current_file_callback, 
                             if author: m.add_text("Artist", author)
                             if description: m.add_text("Description", description)
                             save_k['pnginfo'] = m
-                        
                         img.save(temp_p, **save_k)
                     os.replace(temp_p, fp)
-                    
                 elif is_vid and is_ffmpeg_installed():
                     temp_v = fp.with_name(f"temp_{fp.name}")
                     cmd = ["ffmpeg", "-y", "-i", str(fp), "-c", "copy"]
-                    if remove_metadata:
-                        cmd.extend(["-map_metadata", "-1"])
-                    if author:
-                        cmd.extend(["-metadata", f"artist={author}"])
-                    if description:
-                        cmd.extend(["-metadata", f"description={description}"])
+                    if remove_metadata: cmd.extend(["-map_metadata", "-1"])
+                    if author: cmd.extend(["-metadata", f"artist={author}"])
+                    if description: cmd.extend(["-metadata", f"description={description}"])
                     cmd.append(str(temp_v))
                     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    if temp_v.exists():
-                        os.replace(temp_v, fp)
+                    if temp_v.exists(): os.replace(temp_v, fp)
 
             file_progress_callback(100)
         except Exception as e:

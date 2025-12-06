@@ -40,11 +40,13 @@ QPushButton:pressed {
     background-color: #dae0e5;
 }
 
-/* [修正] 開始執行按鈕 (固定底部，藍色底色) */
+/* [關鍵修復] 開始執行按鈕 (固定底部，藍色底色) */
 QPushButton#ExecBtn {
+    background: #2563eb; /* 使用 background 簡寫確保覆蓋 */
     background-color: #2563eb; 
     color: white;
     border: 1px solid #2563eb;
+    border-style: solid; /* 強制邊框樣式 */
     font-size: 16px;
     padding: 10px 24px;
     border-radius: 6px;
@@ -61,7 +63,7 @@ QPushButton#ExecBtn:pressed {
 
 /* 清除 Log 按鈕 (深灰底) */
 QPushButton#ClearLogBtn {
-    background-color: #4b5563; /* Gray-600 */
+    background-color: #4b5563; 
     color: white;
     border: 1px solid #374151;
     border-radius: 4px;
@@ -70,7 +72,7 @@ QPushButton#ClearLogBtn {
     min-width: 70px;
 }
 QPushButton#ClearLogBtn:hover {
-    background-color: #374151; /* Gray-700 */
+    background-color: #374151;
 }
 
 /* 輸入框與選單 */
@@ -97,7 +99,7 @@ QComboBox QAbstractItemView {
     outline: none;
 }
 
-/* [修正] 通用 Checkbox (淺灰底色) */
+/* 通用 Checkbox (淺灰底色) */
 QCheckBox {
     spacing: 8px;
     padding: 6px;
@@ -117,16 +119,16 @@ QCheckBox#PinkCheck {
     border: 1px solid #fbcfe8;
 }
 
-/* [修正] 滑桿軌道樣式 (增加灰色底色) */
+/* 滑桿軌道樣式 (增加灰色底色) */
 QSlider::groove:horizontal {
     border: 1px solid #ccc;
-    height: 6px; /* 軌道高度 */
-    background: #e5e7eb; /* 軌道底色 Gray-200 */
+    height: 6px;
+    background: #e5e7eb; 
     margin: 2px 0;
     border-radius: 3px;
 }
 QSlider::sub-page:horizontal {
-    background: #3b82f6; /* 滑過的部分 Blue-500 */
+    background: #3b82f6; 
     border-radius: 3px;
 }
 QSlider::handle:horizontal {
@@ -134,7 +136,7 @@ QSlider::handle:horizontal {
     border: 1px solid #64748b;
     width: 16px;
     height: 16px;
-    margin: -6px 0; /* 垂直置中 */
+    margin: -6px 0; 
     border-radius: 8px;
 }
 
@@ -149,7 +151,7 @@ QProgressBar#TotalProgress {
     font-weight: bold;
 }
 QProgressBar#TotalProgress::chunk {
-    background-color: #3b82f6; /* Blue */
+    background-color: #3b82f6;
     border-radius: 5px;
 }
 
@@ -165,7 +167,7 @@ QProgressBar#FileProgress {
     font-weight: bold;
 }
 QProgressBar#FileProgress::chunk {
-    background-color: #22c55e; /* Green */
+    background-color: #22c55e;
     border-radius: 3px;
 }
 
@@ -219,6 +221,12 @@ QLabel#DragDrop:hover {
     background-color: rgba(37, 99, 235, 0.1);
     color: #2563eb;
     font-weight: bold;
+}
+
+/* 底部狀態區塊 (移除上方線條) */
+QWidget#StatusBar {
+    background-color: rgba(223, 212, 186, 0.95);
+    border-top: none; 
 }
 """
 

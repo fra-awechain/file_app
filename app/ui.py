@@ -10,7 +10,7 @@ import app.logic as logic
 from pathlib import Path
 
 # -----------------------------------------------------------
-# 元件：SelectableLabel (可選取文字)
+# 元件：SelectableLabel
 # -----------------------------------------------------------
 class SelectableLabel(QLabel):
     def __init__(self, text="", parent=None, **kwargs):
@@ -450,7 +450,7 @@ class MainWindow(QMainWindow):
         
         # 固定底部區塊
         bot = QWidget()
-        bot.setStyleSheet("background:#e6e6e6;border-top:none;") # [修正] 移除上方細線
+        bot.setStyleSheet("background:#e6e6e6;border-top:none;")
         bl = QHBoxLayout(bot)
         bl.setContentsMargins(40,15,40,15)
         
@@ -471,7 +471,6 @@ class MainWindow(QMainWindow):
         wl.addWidget(bot)
         return wrapper, self.cl, pb
 
-    # [修正] 復原路徑設定群組 (加入 setLayout)
     def create_path_group(self, with_output=True):
         g = QGroupBox("路徑")
         l = QFormLayout()
@@ -507,7 +506,7 @@ class MainWindow(QMainWindow):
             ro.addWidget(do)
             l.addRow(SelectableLabel("輸出:"), ro)
             
-        g.setLayout(l) # [修正] 加上 setLayout
+        g.setLayout(l)
         return g, ei, eo
 
     def select_folder(self, line_edit):
