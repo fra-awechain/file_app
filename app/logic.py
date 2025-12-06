@@ -96,16 +96,17 @@ def process_single_image_fill(img, opaque_sets, trans_sets, semi_sets, bg_sets, 
 
 def task_image_fill(log_callback, progress_callback, current_file_callback, file_progress_callback, input_path, output_path, recursive, settings_opaque, settings_trans, settings_semi, bg_settings, crop_settings, delete_original, output_format):
     log_callback("🚀 [Smart Fill] 開始"); files = get_files(input_path, recursive, file_types='image'); total = len(files)
-    out_base = Path(output_path); out_base.mkdir(parents=True, exist_ok=True); ext = f".{output_format}"
+    out_base = Path(output_path); out_base.mkdir(parents=True, exist_ok=True); ext_map = {'png':'.png','jpg':'.jpg','webp':'.webp'}; tgt_ext = ext_map.get(output_format.lower(), '.png')
     for i, fp in enumerate(files):
         try:
             progress_callback(int((i/total)*100)); current_file_callback(fp.name); file_progress_callback(0)
-            dest = out_base / (fp.relative_to(Path(input_path)).parent if Path(input_path).is_dir() else fp.parent.name); dest.mkdir(parents=True, exist_ok=True)
+            dest = out_base / (fp.relative_to(Path(input_path)).parent if Path(input_path).is_dir() else fp.parent.name); dest.mkdir(parents=True, exist_ok=True); out_file = dest / f"{fp.stem}{tgt_ext}"
             with Image.open(fp) as img:
                 res = process_single_image_fill(img, settings_opaque, settings_trans, settings_semi, bg_settings, crop_settings)
-                if output_format.upper()=='JPG': bg=Image.new("RGB",res.size,(255,255,255)); bg.paste(res,mask=res.split()[3]); res=bg
-                res.save(dest/f"{fp.stem}{ext}", quality=95); log_callback(f"🎨 完成: {fp.name}")
-            if delete_original: os.remove(fp)
+                fmt = output_format.upper()
+                if fmt == 'JPG': bg = Image.new("RGB", res.size, (255,255,255)); bg.paste(res, mask=res.split()[3]); res = bg; fmt = 'JPEG'
+                res.save(out_file, format=fmt, quality=95); log_callback(f"🎨 完成: {fp.name}")
+            if delete_original and fp.resolve()!=out_file.resolve(): os.remove(fp)
             file_progress_callback(100)
         except Exception as e: log_callback(f"❌ {fp.name}: {e}")
     progress_callback(100); current_file_callback("Done"); file_progress_callback(100); log_callback("🏁 結束")
@@ -119,17 +120,24 @@ def task_scaling(log_callback, progress_callback, current_file_callback, file_pr
             new_name = f"{prefix}{fp.stem}{postfix}{'.jpg' if convert_jpg else fp.suffix}"; (new_name := new_name.lower()) if lower_ext else None
             with Image.open(fp) as img:
                 if remove_metadata: img.info.clear()
-                if convert_jpg and img.mode in ('RGBA','P'): img = img.convert('RGB')
-                if crop_doubao: w,h=img.size; r=w/h; sw,sh=w-320,h-110; img=img.crop((0,0,(sw,int(sw/r)) if int(sw/r)<=sh else (int(sh*r),sh)))
+                if convert_jpg and img.mode in ('RGBA','LA','P'): img = img.convert('RGB')
+                if crop_doubao: w,h=img.size; sw,sh=w-320,h-110; img=img.crop((0,0,(sw,int(sw/r)) if int(sw/(r:=w/h))<=sh else (int(sh*r),sh)))
                 w, h = img.size; nw, nh = w, h
                 if mode=='ratio' and mode_value_1!=1: nw,nh = int(w*mode_value_1), int(h*mode_value_1)
-                elif mode=='width' and mode_value_1>0: nw,nh = int(mode_value_1), int(h*(mode_value_1/w))
-                elif mode=='height' and mode_value_1>0: nw,nh = int(w*(mode_value_1/h)), int(mode_value_1)
+                elif mode=='width' and mode_value_1>0: r=mode_value_1/w; nw,nh = int(mode_value_1), int(h*r)
+                elif mode=='height' and mode_value_1>0: r=mode_value_1/h; nh,nw = int(mode_value_1), int(w*r)
                 if (nw,nh)!=(w,h): img = img.resize((nw,nh), Image.Resampling.LANCZOS)
                 if sharpen_factor!=1: img = ImageEnhance.Sharpness(img).enhance(sharpen_factor)
                 if brightness_factor!=1: img = ImageEnhance.Brightness(img).enhance(brightness_factor)
-                img.save(dest/new_name, **({'quality':95} if new_name.endswith('.jpg') else {}))
-            if delete_original: os.remove(fp)
+                
+                save_k = {'quality':95} if new_name.lower().endswith('.jpg') else {}
+                if new_name.lower().endswith('.png'):
+                    from PIL.PngImagePlugin import PngInfo; meta=PngInfo()
+                    if author: meta.add_text("Artist",author); meta.add_text("Author",author)
+                    if description: meta.add_text("Description",description)
+                    save_k['pnginfo'] = meta
+                img.save(dest/new_name, **save_k)
+            if delete_original and fp.resolve()!=dest/new_name: os.remove(fp)
             file_progress_callback(100)
         except Exception as e: log_callback(f"❌ {fp.name}: {e}")
     progress_callback(100); log_callback("🏁 結束")
@@ -147,9 +155,10 @@ def task_video_sharpen(log_callback, progress_callback, current_file_callback, f
             elif scale_mode in ['hd1080', 'hd720']: px = 1080 if scale_mode=='hd1080' else 720; filters.append(f"scale='if(lt(iw,ih),{px},-2)':'if(lt(iw,ih),-2,{px})'")
             cmd = ["ffmpeg", "-y", "-i", str(fp)]; (cmd.extend(["-vf", ",".join(filters)]) if filters else None)
             cmd.extend(["-c:v", "libx264", "-crf", "23"] if (filters or convert_h264) else ["-c:v", "copy"])
-            cmd.extend(["-c:a", "copy"]); cmd.append(str(out_file))
-            subprocess.run(cmd); acc_dur += max(get_video_duration(fp), 1); progress_callback(int((acc_dur/total_dur)*100))
-            if delete_original: os.remove(fp)
+            cmd.extend(["-c:a", "copy"]); (cmd.extend(["-map_metadata", "-1"]) if remove_metadata else None); (cmd.extend(["-metadata", f"artist={author}"]) if author else None); cmd.append(str(out_file))
+            process = subprocess.Popen(cmd, stderr=subprocess.PIPE); process.wait()
+            if process.returncode == 0 and delete_original and fp.resolve() != out_file.resolve(): os.remove(fp)
+            acc_dur += max(get_video_duration(fp), 1); progress_callback(int((acc_dur/total_dur)*100))
         except Exception as e: log_callback(f"❌ {fp.name}: {e}")
     log_callback("🏁 結束")
 
@@ -159,10 +168,10 @@ def task_rename_replace(log_callback, progress_callback, current_file_callback, 
         progress_callback(int((i/total)*100)); current_file_callback(fp.name)
         try:
             stem = fp.stem; new_stem = stem
-            if do_prefix and old_prefix in new_stem and new_stem.startswith(old_prefix): new_stem = new_prefix + new_stem[len(old_prefix):]
+            if do_prefix and (not old_prefix or new_stem.startswith(old_prefix)): new_stem = new_prefix + (new_stem[len(old_prefix):] if old_prefix else new_stem)
             if do_suffix and old_suffix in new_stem and new_stem.endswith(old_suffix): new_stem = new_stem[:-len(old_suffix)] + new_suffix
             if new_stem != stem: fp.rename(fp.parent / f"{new_stem}{fp.suffix}"); log_callback(f"✏️ {fp.name} -> {new_stem}{fp.suffix}")
-        except: pass
+        except Exception as e: log_callback(f"❌ {fp.name}: {e}")
     progress_callback(100); log_callback("🏁 結束")
 
 def task_multi_res(log_callback, progress_callback, current_file_callback, file_progress_callback, input_path, output_path, recursive, lower_ext, orientation):

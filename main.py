@@ -40,33 +40,35 @@ QPushButton:pressed {
     background-color: #dae0e5;
 }
 
-/* 開始執行按鈕 (強制藍底) */
+/* 開始執行按鈕 (強制藍色底色) */
 QPushButton#ExecBtn {
-    background-color: #2563eb; /* Blue-600 */
+    background-color: #2563eb; 
     color: white;
-    border: none; /* 移除邊框以確保底色滿版 */
+    border: 1px solid #2563eb; /* 加上同色邊框確保顯示 */
     font-size: 16px;
     padding: 10px 24px;
     border-radius: 6px;
     font-weight: bold;
 }
 QPushButton#ExecBtn:hover {
-    background-color: #1d4ed8; /* Blue-700 */
+    background-color: #1d4ed8;
+    border-color: #1d4ed8;
 }
 QPushButton#ExecBtn:pressed {
-    background-color: #1e40af; /* Blue-800 */
+    background-color: #1e40af;
+    border-color: #1e40af;
 }
 
-/* 清除 Log 按鈕 (小顆) */
+/* 清除 Log 按鈕 (深灰底 + Pointer) */
 QPushButton#ClearLogBtn {
-    background-color: #64748b;
+    background-color: #4b5563; /* Gray-600 */
     color: white;
-    border: none;
+    border: 1px solid #374151;
     border-radius: 4px;
     font-size: 12px;
 }
 QPushButton#ClearLogBtn:hover {
-    background-color: #475569;
+    background-color: #374151; /* Gray-700 */
 }
 
 /* 輸入框與選單 */
@@ -93,11 +95,11 @@ QComboBox QAbstractItemView {
     outline: none;
 }
 
-/* 通用 Checkbox (加上底色塊) */
+/* 通用 Checkbox */
 QCheckBox {
     spacing: 8px;
     padding: 8px;
-    background-color: #f1f5f9; /* 淺灰底 */
+    background-color: #f1f5f9;
     border: 1px solid #cbd5e1;
     border-radius: 6px;
     font-weight: 500;
@@ -107,39 +109,39 @@ QCheckBox::indicator {
     height: 18px;
 }
 
-/* 特殊樣式：貼合尺寸裁切 Checkbox (粉紅色底) */
+/* 特殊樣式：貼合尺寸裁切 Checkbox */
 QCheckBox#PinkCheck {
-    background-color: #fce7f3; /* Pink-100 */
-    color: #9d174d; /* Pink-800 */
+    background-color: #fce7f3;
+    color: #9d174d;
     border: 1px solid #fbcfe8;
 }
 
-/* 總進度條 (藍色，文字置中) */
+/* 總進度條 */
 QProgressBar#TotalProgress {
     border: 1px solid #94a3b8;
-    background-color: #e2e8f0; /* 預設底色 (Slate-200) */
+    background-color: #e2e8f0;
     border-radius: 6px;
     height: 20px;
     text-align: center;
-    color: #0f172a; /* 文字顏色 */
+    color: #0f172a;
     font-weight: bold;
 }
 QProgressBar#TotalProgress::chunk {
-    background-color: #3b82f6; /* Blue */
+    background-color: #3b82f6;
     border-radius: 5px;
 }
 
-/* 檔案進度條 (綠色，無文字) */
+/* 檔案進度條 */
 QProgressBar#FileProgress {
     border: 1px solid #cbd5e1;
-    background-color: #e2e8f0; /* 預設底色 */
+    background-color: #e2e8f0;
     border-radius: 4px;
     height: 10px;
     text-align: center;
     color: transparent; 
 }
 QProgressBar#FileProgress::chunk {
-    background-color: #22c55e; /* Green */
+    background-color: #22c55e;
     border-radius: 3px;
 }
 
@@ -217,14 +219,11 @@ QLabel#DragDrop:hover {
 
 def main():
     app = QApplication(sys.argv)
-    
     font_family = "Segoe UI" if os.name == "nt" else "PingFang TC"
     app.setFont(QFont(font_family, 10))
     app.setStyleSheet(STYLESHEET)
-    
     window = MainWindow()
     window.show()
-    
     sys.exit(app.exec())
 
 if __name__ == "__main__":

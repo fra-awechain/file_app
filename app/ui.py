@@ -9,10 +9,14 @@ from app.workers import Worker
 import app.logic as logic
 
 class SelectableLabel(QLabel):
-    def __init__(self, text="", parent=None):
+    def __init__(self, text="", parent=None, **kwargs):
         super().__init__(text, parent)
         self.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.setCursor(Qt.IBeamCursor)
+        # 處理額外參數避免 TypeError
+        if 'alignment' in kwargs: self.setAlignment(kwargs['alignment'])
+        if 'styleSheet' in kwargs: self.setStyleSheet(kwargs['styleSheet'])
+        if 'fixedHeight' in kwargs: self.setFixedHeight(kwargs['fixedHeight'])
 
 class DragDropArea(QLabel):
     fileDropped = Signal(str)
@@ -54,8 +58,11 @@ class ImageTransformDialog(QDialog):
         self.sl_s = QSlider(Qt.Horizontal); self.sl_s.setRange(10, 200); self.sl_s.setValue(100)
         self.sl_r = QSlider(Qt.Horizontal); self.sl_r.setRange(0, 360); self.sl_r.setValue(0)
         self.sb_x = QSpinBox(); self.sb_x.setRange(-999,999); self.sb_y = QSpinBox(); self.sb_y.setRange(-999,999)
-        l.addRow("圖片:", self.btn_p); l.addRow("縮放 %:", self.sl_s); l.addRow("旋轉:", self.sl_r)
-        l.addRow("X 偏移:", self.sb_x); l.addRow("Y 偏移:", self.sb_y)
+        l.addRow(SelectableLabel("圖片:"), self.btn_p)
+        l.addRow(SelectableLabel("縮放 %:"), self.sl_s)
+        l.addRow(SelectableLabel("旋轉:"), self.sl_r)
+        l.addRow(SelectableLabel("X 偏移:"), self.sb_x)
+        l.addRow(SelectableLabel("Y 偏移:"), self.sb_y)
         btn = QPushButton("確定"); btn.clicked.connect(self.accept); l.addRow(btn)
     def bp(self): f,_=QFileDialog.getOpenFileName(self,"選圖"); (setattr(self,'path',f) or self.btn_p.setText(f)) if f else None
     def get_data(self): return {'image_path':self.path, 'transform':{'scale':self.sl_s.value(), 'angle':self.sl_r.value(), 'x':self.sb_x.value(), 'y':self.sb_y.value()}}
@@ -82,8 +89,8 @@ class RegionControl(QGroupBox):
         self.cb_tr.currentIndexChanged.connect(lambda i: (self.w_tr.setVisible(i==1), self.settings_changed.emit()))
         l.addWidget(self.cb_tr)
         self.w_tr = QWidget(); lr = QHBoxLayout(self.w_tr); lr.setContentsMargins(0,0,0,0)
-        lr.addWidget(QLabel("不透明")); self.sl_tr = QSlider(Qt.Horizontal); self.sl_tr.setRange(0,100); self.sl_tr.valueChanged.connect(self.settings_changed.emit)
-        lr.addWidget(self.sl_tr); lr.addWidget(QLabel("透明")); l.addWidget(self.w_tr); self.w_tr.hide()
+        lr.addWidget(SelectableLabel("不透明")); self.sl_tr = QSlider(Qt.Horizontal); self.sl_tr.setRange(0,100); self.sl_tr.valueChanged.connect(self.settings_changed.emit)
+        lr.addWidget(self.sl_tr); lr.addWidget(SelectableLabel("透明")); l.addWidget(self.w_tr); self.w_tr.hide()
 
         l.addWidget(SelectableLabel("填充內容:"))
         self.cb_c = WhiteComboBox(); self.cb_c.addItems(["維持", "填充顏色", "填充漸層", "填充圖片"])
@@ -95,7 +102,7 @@ class RegionControl(QGroupBox):
         lc.addWidget(SelectableLabel("色值:")); lc.addWidget(self.edt_fc); lc.addWidget(bfc); self.st_c.addWidget(pc)
 
         pg = QWidget(); lg = QVBoxLayout(pg); lg.setContentsMargins(0,0,0,0)
-        self.sl_ga = QSlider(Qt.Horizontal); self.sl_ga.setRange(0,360); lg.addWidget(QLabel("角度 (0-360):")); lg.addWidget(self.sl_ga)
+        self.sl_ga = QSlider(Qt.Horizontal); self.sl_ga.setRange(0,360); lg.addWidget(SelectableLabel("角度 (0-360):")); lg.addWidget(self.sl_ga)
         lgs = QHBoxLayout(); self.btn_gs = QPushButton("起"); self.btn_ge = QPushButton("結")
         self.btn_gs.clicked.connect(lambda: self.pk_g(True)); self.btn_ge.clicked.connect(lambda: self.pk_g(False))
         lgs.addWidget(self.btn_gs); lgs.addWidget(self.btn_ge); lg.addLayout(lgs); self.st_c.addWidget(pg)
@@ -109,41 +116,43 @@ class RegionControl(QGroupBox):
     def pk_g(self, is_start): (c:=QColorDialog.getColor()) and c.isValid() and (self.sets.setdefault('fill_gradient',{})).__setitem__('start' if is_start else 'end', c.name()) or self.settings_changed.emit()
     def pk_img(self): (f:=QFileDialog.getOpenFileName(self,"選圖")[0]) and (self.sets.__setitem__('fill_image_path',f) or self.settings_changed.emit())
     def get_settings(self):
-        return {'target_mode': ['all','specific','non_specific'][self.cb_t.currentIndex()] if self.has_target else 'all',
-                'target_color': self.edt_tc.text(), 'trans_mode': 'change' if self.cb_tr.currentIndex()==1 else 'maintain',
+        target_mode = ['all','specific','non_specific'][self.cb_t.currentIndex()] if self.has_target else 'all'
+        target_color = self.edt_tc.text() if hasattr(self, 'edt_tc') else '#FFFFFF'
+        return {'target_mode': target_mode, 'target_color': target_color, 
+                'trans_mode': 'change' if self.cb_tr.currentIndex()==1 else 'maintain',
                 'trans_val': self.sl_tr.value(), 'fill_mode': ['maintain','color','gradient','image'][self.cb_c.currentIndex()],
                 'fill_color': self.edt_fc.text(), 'fill_gradient': {'angle':self.sl_ga.value(), **self.sets.get('fill_gradient',{})},
                 'fill_image_path': self.sets['fill_image_path']}
 
 class MainWindow(QMainWindow):
-    def __init__(self): super().__init__(); self.setWindowTitle("Python Media Batch Processor"); self.resize(1400, 950); self.init_ui()
+    def __init__(self): 
+        super().__init__() 
+        self.setWindowTitle("Python Media Batch Processor")
+        self.resize(1400, 950)
+        self.settings = QSettings("MediaBatcher", "AppConfig")
+        self.init_ui()
+
     def init_ui(self):
         central = QWidget(); self.setCentralWidget(central); ml = QHBoxLayout(central); ml.setContentsMargins(0,0,0,0); ml.setSpacing(0)
         self.sb = QWidget(); self.sb.setFixedWidth(260); self.sb.setObjectName("SidebarFrame"); sl = QVBoxLayout(self.sb); sl.setContentsMargins(0,30,0,20); sl.setSpacing(8)
-        sl.addWidget(QLabel("Media Batcher", styleSheet="color:#38bdf8;font-size:24px;font-weight:bold;margin-left:20px;"))
+        sl.addWidget(SelectableLabel("Media Batcher", parent=self.sb)); self.sb.findChild(QLabel).setStyleSheet("color:#38bdf8;font-size:24px;font-weight:bold;margin-left:20px;")
         self.btns = []; items = [("圖片處理","🖼️",0), ("智慧填色","🎨",1), ("影片銳利化","🎥",2), ("更名工具","📝",3), ("Icon 生成","📦",4)]
         for t, i, idx in items: b = SidebarButton(t, i, idx, self.sb); b.clicked.connect(self.switch_page); sl.addWidget(b); self.btns.append(b)
         sl.addStretch(); ml.addWidget(self.sb)
         
         right = QWidget(); right.setObjectName("RightFrame"); rl = QVBoxLayout(right); rl.setContentsMargins(0,0,0,0)
-        self.header = QLabel("功能", styleSheet="background:white;padding-left:30px;font-size:24px;font-weight:bold;min-height:60px;")
+        self.header = SelectableLabel("功能"); self.header.setFixedHeight(60); self.header.setStyleSheet("background:white;padding-left:30px;font-size:24px;font-weight:bold;")
         rl.addWidget(self.header); self.stack = QStackedWidget()
         self.stack.addWidget(self.page_scaling_ui()); self.stack.addWidget(self.page_fill_ui()); self.stack.addWidget(self.page_video_ui())
         self.stack.addWidget(self.page_rename_ui()); self.stack.addWidget(self.page_multi_ui())
         
-        # Log Panel 改進: Console 與 按鈕平行
         self.log_con = QWidget(); self.log_con.setStyleSheet("background-color:#2b2b2b;color:white;"); ll = QHBoxLayout(self.log_con); ll.setContentsMargins(10,10,10,10); ll.setSpacing(10)
         self.log_area = QTextEdit(); self.log_area.setReadOnly(True); self.log_area.setStyleSheet("background:#1e1e1e;color:#eee;border:1px solid #444;font-family:Consolas;padding:5px;")
-        
-        # 右側控制區 (清除按鈕)
-        right_ctrl = QVBoxLayout(); right_ctrl.setContentsMargins(0,0,0,0); right_ctrl.setAlignment(Qt.AlignTop)
-        btn_c = QPushButton("清除 Log"); btn_c.setObjectName("ClearLogBtn"); btn_c.setFixedSize(80, 28)
+        rc = QVBoxLayout(); rc.setContentsMargins(0,0,0,0); rc.setAlignment(Qt.AlignTop)
+        btn_c = QPushButton("清除 Log"); btn_c.setObjectName("ClearLogBtn"); btn_c.setFixedSize(80, 28); btn_c.setCursor(Qt.PointingHandCursor)
         btn_c.clicked.connect(lambda: self.log_area.clear())
-        right_ctrl.addWidget(btn_c)
+        rc.addWidget(btn_c); ll.addWidget(self.log_area, 1); ll.addLayout(rc)
         
-        ll.addWidget(self.log_area, 1) # Console 佔據主要空間
-        ll.addLayout(right_ctrl)       # 按鈕在右側
-
         sp = QSplitter(Qt.Vertical); sp.addWidget(self.stack); sp.addWidget(self.log_con); sp.setStretchFactor(0, 3); sp.setStretchFactor(1, 1); rl.addWidget(sp); ml.addWidget(right); self.switch_page(0)
 
     def switch_page(self, idx): self.stack.setCurrentIndex(idx); [b.set_selected(b.index==idx) for b in self.btns]; self.header.setText(["圖片處理","智慧填色","影片銳利化","更名工具","Icon 生成"][idx])
@@ -158,7 +167,7 @@ class MainWindow(QMainWindow):
         bl = QVBoxLayout(ba); bl.setContentsMargins(40,15,40,15)
         
         v_file = QVBoxLayout(); v_file.setSpacing(4)
-        r_info = QHBoxLayout(); self.lbl_file = SelectableLabel(""); r_info.addWidget(self.lbl_file); r_info.addStretch(); self.lbl_file_pct = QLabel("0%"); r_info.addWidget(self.lbl_file_pct)
+        r_info = QHBoxLayout(); self.lbl_file = SelectableLabel(""); r_info.addWidget(self.lbl_file); r_info.addStretch(); self.lbl_file_pct = SelectableLabel("0%"); r_info.addWidget(self.lbl_file_pct)
         v_file.addLayout(r_info)
         self.pb_file = QProgressBar(); self.pb_file.setObjectName("FileProgress"); self.pb_file.setRange(0,100); self.pb_file.setTextVisible(False); v_file.addWidget(self.pb_file); bl.addLayout(v_file); bl.addSpacing(10)
 
@@ -168,15 +177,19 @@ class MainWindow(QMainWindow):
         r_total = QHBoxLayout(); r_total.addWidget(SelectableLabel("總進度:")); r_total.addWidget(pb); r2.addLayout(r_total); bl.addLayout(r2)
         pl.addWidget(ba); return page, self.cl, btn, pb
 
-    def create_path_group(self):
+    def create_path_group(self, inputLabel="輸入:", outputLabel="輸出:"):
         g = QGroupBox("路徑"); l = QFormLayout()
         ri = QHBoxLayout(); ei = QLineEdit(); bd = QPushButton("資料夾"); bf = QPushButton("檔案"); dd = DragDropArea()
         bd.clicked.connect(lambda: (d:=QFileDialog.getExistingDirectory(self)) and ei.setText(d)); bf.clicked.connect(lambda: (f:=QFileDialog.getOpenFileName(self)[0]) and ei.setText(f)); dd.fileDropped.connect(ei.setText)
-        ri.addWidget(ei); ri.addWidget(bd); ri.addWidget(bf); ri.addWidget(dd)
-        ro = QHBoxLayout(); eo = QLineEdit(); bo = QPushButton("資料夾"); do = DragDropArea()
-        bo.clicked.connect(lambda: (d:=QFileDialog.getExistingDirectory(self)) and eo.setText(d)); do.fileDropped.connect(eo.setText)
-        ro.addWidget(eo); ro.addWidget(bo); ro.addWidget(do); l.addRow(SelectableLabel("輸入:"), ri); l.addRow(SelectableLabel("輸出:"), ro)
-        g.setLayout(l); return g, ei, eo
+        ri.addWidget(ei); ri.addWidget(bd); ri.addWidget(bf); ri.addWidget(dd); l.addRow(SelectableLabel(inputLabel), ri)
+        
+        if outputLabel:
+            ro = QHBoxLayout(); eo = QLineEdit(); bo = QPushButton("資料夾"); do = DragDropArea()
+            bo.clicked.connect(lambda: (d:=QFileDialog.getExistingDirectory(self)) and eo.setText(d)); do.fileDropped.connect(eo.setText)
+            ro.addWidget(eo); ro.addWidget(bo); ro.addWidget(do); l.addRow(SelectableLabel(outputLabel), ro)
+            return g, ei, eo
+        else:
+            return g, ei, None
 
     def page_scaling_ui(self):
         p,l,b,pb = self._create_scroll(); self.sc_pb = pb; self.btn_sc = b
@@ -184,18 +197,29 @@ class MainWindow(QMainWindow):
         go = QGroupBox("參數"); lo = QFormLayout(go)
         self.sc_mode = WhiteComboBox(); self.sc_mode.setMinimumWidth(250)
         self.sc_mode.addItems(["維持現狀，不縮放", "比例 (Ratio)", "固定寬度 (Fixed Width)", "固定高度 (Fixed Height)"])
-        self.sc_v1 = QLineEdit("1.0"); self.lbl_hint = QLabel("")
+        self.sc_v1 = QLineEdit("1.0"); self.lbl_hint = SelectableLabel("")
         self.sc_mode.currentIndexChanged.connect(lambda i: self.lbl_hint.setText("0.1-5.0" if i==1 else "像素" if i>1 else ""))
-        h_row = QHBoxLayout(); h_row.addWidget(self.sc_v1); h_row.addWidget(self.lbl_hint); lo.addRow("模式:", self.sc_mode); lo.addRow("數值:", h_row)
-        self.sc_sh = QLineEdit("1.0"); lo.addRow("銳利度 (0.0-2.0):", self.sc_sh)
-        self.sc_br = QLineEdit("1.0"); lo.addRow("亮度 (0.0-2.0):", self.sc_br)
+        h_row = QHBoxLayout(); h_row.addWidget(self.sc_v1); h_row.addWidget(self.lbl_hint); lo.addRow(SelectableLabel("模式:"), self.sc_mode); lo.addRow(SelectableLabel("數值:"), h_row)
+        self.sc_sh = QLineEdit("1.0"); lo.addRow(SelectableLabel("銳利度 (0.0-2.0):"), self.sc_sh)
+        self.sc_br = QLineEdit("1.0"); lo.addRow(SelectableLabel("亮度 (0.0-2.0):"), self.sc_br)
+        
+        self.sc_pre = QLineEdit(); self.sc_post = QLineEdit()
+        lo.addRow(SelectableLabel("前綴:"), self.sc_pre); lo.addRow(SelectableLabel("後綴:"), self.sc_post)
+        
+        self.sc_auth = QLineEdit(self.settings.value("sc_auth", "")); self.sc_desc = QLineEdit(self.settings.value("sc_desc", ""))
+        lo.addRow(SelectableLabel("作者:"), self.sc_auth); lo.addRow(SelectableLabel("描述:"), self.sc_desc)
         l.addWidget(go)
+        
         gc = QGroupBox("選項"); lc = QGridLayout(gc)
         self.sc_rec = QCheckBox("含子資料夾"); self.sc_rec.setChecked(True); self.sc_jpg = QCheckBox("轉JPG"); self.sc_jpg.setChecked(True)
         self.sc_low = QCheckBox("小寫副檔名"); self.sc_low.setChecked(True); self.sc_del = QCheckBox("刪原始檔")
-        self.sc_crop = QCheckBox("豆包裁切"); self.sc_meta = QCheckBox("除Meta")
+        self.sc_crop = QCheckBox("豆包裁切"); self.sc_meta = QCheckBox("移除檔案隱藏資訊(Meta)")
         lc.addWidget(self.sc_rec,0,0); lc.addWidget(self.sc_jpg,0,1); lc.addWidget(self.sc_low,0,2); lc.addWidget(self.sc_del,1,0); lc.addWidget(self.sc_crop,1,1); lc.addWidget(self.sc_meta,1,2); l.addWidget(gc)
-        self.btn_sc.clicked.connect(lambda: self.run_worker(logic.task_scaling, self.sc_pb, input_path=self.sc_i.text(), output_path=self.sc_o.text(), mode=['none','ratio','width','height'][self.sc_mode.currentIndex()], mode_value_1=float(self.sc_v1.text() or 0), recursive=self.sc_rec.isChecked(), convert_jpg=self.sc_jpg.isChecked(), lower_ext=self.sc_low.isChecked(), delete_original=self.sc_del.isChecked(), prefix="", postfix="", crop_doubao=self.sc_crop.isChecked(), sharpen_factor=float(self.sc_sh.text()), brightness_factor=float(self.sc_br.text()), remove_metadata=self.sc_meta.isChecked(), author="", description=""))
+        
+        self.btn_sc.clicked.connect(lambda: (
+            self.settings.setValue("sc_auth", self.sc_auth.text()), self.settings.setValue("sc_desc", self.sc_desc.text()),
+            self.run_worker(logic.task_scaling, self.sc_pb, input_path=self.sc_i.text(), output_path=self.sc_o.text(), mode=['none','ratio','width','height'][self.sc_mode.currentIndex()], mode_value_1=float(self.sc_v1.text() or 0), recursive=self.sc_rec.isChecked(), convert_jpg=self.sc_jpg.isChecked(), lower_ext=self.sc_low.isChecked(), delete_original=self.sc_del.isChecked(), prefix=self.sc_pre.text(), postfix=self.sc_post.text(), crop_doubao=self.sc_crop.isChecked(), sharpen_factor=float(self.sc_sh.text()), brightness_factor=float(self.sc_br.text()), remove_metadata=self.sc_meta.isChecked(), author=self.sc_auth.text(), description=self.sc_desc.text())
+        ))
         return p
 
     def page_fill_ui(self):
@@ -203,36 +227,26 @@ class MainWindow(QMainWindow):
         gp, self.fi, self.fo = self.create_path_group(); l.addWidget(gp)
         rr = QHBoxLayout(); self.rop = RegionControl("不透明", True); self.rtr = RegionControl("透明"); self.rse = RegionControl("半透明", True)
         rr.addWidget(self.rop); rr.addWidget(self.rtr); rr.addWidget(self.rse); l.insertLayout(1, rr)
-        
-        # 修正: 背景設定與裁切設定 50/50 分配
-        adv = QHBoxLayout()
-        
-        # 左側：背景設定 (Stretch=1)
-        gb = QGroupBox("背景設定"); lb = QFormLayout(gb)
+        adv = QHBoxLayout(); gb = QGroupBox("背景設定"); lb = QFormLayout(gb)
         self.bg_mode = WhiteComboBox(); self.bg_mode.addItems(["疊加", "鏤空背景"])
         self.bg_mat = WhiteComboBox(); self.bg_mat.addItems(["色塊", "漸層", "圖片"]); self.bg_mat.currentIndexChanged.connect(lambda i: self.st_bg.setCurrentIndex(i))
         self.st_bg = QStackedWidget(); p1 = QWidget(); l1 = QHBoxLayout(p1); self.bg_c = QLineEdit("#FFFFFF"); b_bgc = QPushButton("選色"); b_bgc.clicked.connect(lambda: (c:=QColorDialog.getColor()) and self.bg_c.setText(c.name()))
         l1.addWidget(self.bg_c); l1.addWidget(b_bgc); self.st_bg.addWidget(p1)
-        p2 = QWidget(); l2 = QVBoxLayout(p2); self.bg_ga = QSlider(Qt.Horizontal); self.bg_ga.setRange(0,360); l2.addWidget(QLabel("角度")); l2.addWidget(self.bg_ga); self.st_bg.addWidget(p2)
+        p2 = QWidget(); l2 = QVBoxLayout(p2); self.bg_ga = QSlider(Qt.Horizontal); self.bg_ga.setRange(0,360); l2.addWidget(SelectableLabel("角度")); l2.addWidget(self.bg_ga); self.st_bg.addWidget(p2)
         p3 = QWidget(); l3 = QVBoxLayout(p3); b_img = QPushButton("設定圖片"); b_img.clicked.connect(lambda: ImageTransformDialog(self).exec()); l3.addWidget(b_img); self.st_bg.addWidget(p3)
         self.bg_cut = WhiteComboBox(); self.bg_cut.addItems(["原始圖片不透明像素", "原始圖片透明像素", "原始圖片色值"])
-        lb.addRow("模式:", self.bg_mode); lb.addRow("素材:", self.bg_mat); lb.addRow("設定:", self.st_bg); lb.addRow("鏤空目標:", self.bg_cut)
-        adv.addWidget(gb, 1) # Stretch 1
-
-        # 右側：裁切設定 (Stretch=1)
+        lb.addRow(SelectableLabel("模式:"), self.bg_mode); lb.addRow(SelectableLabel("素材:"), self.bg_mat); lb.addRow(SelectableLabel("設定:"), self.st_bg); lb.addRow(SelectableLabel("鏤空目標:"), self.bg_cut)
+        adv.addWidget(gb, 1)
         gc = QGroupBox("裁切設定"); lc = QVBoxLayout(gc)
         self.ck_shp = QCheckBox("形狀裁切"); self.cb_shp = WhiteComboBox(); self.cb_shp.hide()
         self.ck_shp.toggled.connect(self.cb_shp.setVisible)
         self.cb_shp.addItems(["圓形","正方形","正三角形","正五邊形","正六邊形","四角星形(圓角)","四角星形(尖角)","五角星形(圓角)","五角星形(尖角)","隨機雲狀(正圓內)","隨機雲狀"])
         self.ck_trim = QCheckBox("貼合尺寸裁切"); self.ck_trim.setObjectName("PinkCheck")
         lc.addWidget(self.ck_shp); lc.addWidget(self.cb_shp); lc.addWidget(self.ck_trim); lc.addStretch()
-        adv.addWidget(gc, 1) # Stretch 1
-        
-        l.insertLayout(2, adv)
-
+        adv.addWidget(gc, 1); l.insertLayout(2, adv)
         out_layout = QHBoxLayout(); gout = QGroupBox("輸出設定"); lout = QVBoxLayout(gout)
-        lout.addWidget(QLabel("格式:")); cb_fmt = WhiteComboBox(); cb_fmt.addItems(["png","jpg"]); lout.addWidget(cb_fmt)
-        out_layout.addWidget(gout); out_layout.addWidget(QLabel("預覽區塊(佔位)", alignment=Qt.AlignCenter, styleSheet="border:2px dashed #999;background:#eee;min-height:100px;"))
+        lout.addWidget(SelectableLabel("格式:")); cb_fmt = WhiteComboBox(); cb_fmt.addItems(["png","jpg"]); lout.addWidget(cb_fmt)
+        out_layout.addWidget(gout); out_layout.addWidget(SelectableLabel("預覽區塊(佔位)", alignment=Qt.AlignCenter, styleSheet="border:2px dashed #999;background:#eee;min-height:100px;"))
         l.insertLayout(3, out_layout)
         self.btn_fill.clicked.connect(lambda: self.run_worker(logic.task_image_fill, self.fill_pb, input_path=self.fi.text(), output_path=self.fo.text(), recursive=True, settings_opaque=self.rop.get_settings(), settings_trans=self.rtr.get_settings(), settings_semi=self.rse.get_settings(), bg_settings={'enabled':True, 'mode':['overlay','cutout'][self.bg_mode.currentIndex()], 'material_type':['color','gradient','image'][self.bg_mat.currentIndex()]}, crop_settings={'shape':self.cb_shp.currentText() if self.ck_shp.isChecked() else '無', 'trim':self.ck_trim.isChecked()}, delete_original=False, output_format=cb_fmt.currentText()))
         return p
@@ -241,21 +255,41 @@ class MainWindow(QMainWindow):
         p, l, self.btn_vd, self.vd_pb = self._create_scroll()
         gp, self.vi, self.vo = self.create_path_group(); l.addWidget(gp)
         gs = QGroupBox("參數"); ls = QFormLayout(gs)
-        self.vd_ls = WhiteComboBox(); self.vd_ls.addItems(["3","5","7","9","11"]); self.vd_ls.setCurrentText("7")
-        self.vd_la = QLineEdit("1.0"); ls.addRow(SelectableLabel("Luma Size:"), self.vd_ls); ls.addRow(SelectableLabel("Luma Amount:"), self.vd_la); l.addWidget(gs)
+        
+        # 修正: Luma Size 下拉選單加寬
+        self.vd_ls = WhiteComboBox(); self.vd_ls.setMinimumWidth(250); self.vd_ls.addItems(["3","5","7","9","11"]); self.vd_ls.setCurrentText("7")
+        ls.addRow(SelectableLabel("銳化矩陣大小 (Luma Size):"), self.vd_ls)
+        
+        self.vd_la = QLineEdit("1.0"); l_la = SelectableLabel("(0.0-5.0)"); h_la = QHBoxLayout(); h_la.addWidget(self.vd_la); h_la.addWidget(l_la)
+        ls.addRow(SelectableLabel("銳化強度 (Luma Amount):"), h_la)
+        
+        # 修正: 補回前綴後綴欄位
+        self.vd_pre = QLineEdit(); self.vd_post = QLineEdit()
+        ls.addRow(SelectableLabel("前綴:"), self.vd_pre); ls.addRow(SelectableLabel("後綴:"), self.vd_post)
+        
+        self.vd_auth = QLineEdit(self.settings.value("vd_auth", "")); self.vd_desc = QLineEdit(self.settings.value("vd_desc", ""))
+        ls.addRow(SelectableLabel("作者:"), self.vd_auth); ls.addRow(SelectableLabel("描述:"), self.vd_desc)
+        l.addWidget(gs)
+        
         gr = QGroupBox("輸出"); lr = QFormLayout(gr)
         self.vd_sm = WhiteComboBox(); self.vd_sm.addItems(["None","1080p","720p","Ratio"])
-        self.vd_sv = QLineEdit("1.0"); self.vd_pre = QLineEdit(); self.vd_post = QLineEdit(); self.vd_au = QLineEdit(); self.vd_de = QLineEdit()
-        lr.addRow(SelectableLabel("縮放:"), self.vd_sm); lr.addRow(SelectableLabel("比例:"), self.vd_sv); lr.addRow(SelectableLabel("前綴:"), self.vd_pre); lr.addRow(SelectableLabel("後綴:"), self.vd_post); l.addWidget(gr)
+        self.vd_sv = QLineEdit("1.0")
+        lr.addRow(SelectableLabel("縮放:"), self.vd_sm); lr.addRow(SelectableLabel("比例:"), self.vd_sv); l.addWidget(gr)
+        
         gc = QGroupBox("選項"); lc = QGridLayout(gc)
         self.vd_rec = QCheckBox("含子資料夾"); self.vd_rec.setChecked(True); self.vd_mp4 = QCheckBox("轉MP4"); self.vd_mp4.setChecked(True); self.vd_low = QCheckBox("小寫"); self.vd_low.setChecked(True)
-        self.vd_del = QCheckBox("刪原始"); self.vd_meta = QCheckBox("除Meta")
+        self.vd_del = QCheckBox("刪原始"); self.vd_meta = QCheckBox("移除檔案隱藏資訊(Meta)")
         lc.addWidget(self.vd_rec,0,0); lc.addWidget(self.vd_mp4,0,1); lc.addWidget(self.vd_low,0,2); lc.addWidget(self.vd_del,1,0); lc.addWidget(self.vd_meta,1,1); l.addWidget(gc)
-        self.btn_vd.clicked.connect(lambda: self.run_worker(logic.task_video_sharpen, self.vd_pb, input_path=self.vi.text(), output_path=self.vo.text(), recursive=True, lower_ext=True, delete_original=False, prefix="", postfix="", luma_m_size=7, luma_amount=1.0, scale_mode='none', scale_value=1.0, convert_h264=True, remove_metadata=False, author="", description="")); return p
+        
+        self.btn_vd.clicked.connect(lambda: (
+            self.settings.setValue("vd_auth", self.vd_auth.text()), self.settings.setValue("vd_desc", self.vd_desc.text()),
+            self.run_worker(logic.task_video_sharpen, self.vd_pb, input_path=self.vi.text(), output_path=self.vo.text(), recursive=True, lower_ext=True, delete_original=False, prefix=self.vd_pre.text(), postfix=self.vd_post.text(), luma_m_size=int(self.vd_ls.currentText()), luma_amount=float(self.vd_la.text()), scale_mode='none', scale_value=1.0, convert_h264=True, remove_metadata=self.vd_meta.isChecked(), author=self.vd_auth.text(), description=self.vd_desc.text())
+        ))
+        return p
 
     def page_rename_ui(self):
         p, l, self.btn_rn, self.rn_pb = self._create_scroll()
-        gp, self.ri, _ = self.create_path_group(); l.addWidget(gp)
+        gp, self.ri, _ = self.create_path_group("目標資料夾:", None); l.addWidget(gp)
         gr = QGroupBox("規則"); lr = QFormLayout(gr)
         self.ck_rp = QCheckBox("改前綴"); self.p1 = QLineEdit(); self.p2 = QLineEdit(); rp = QHBoxLayout(); rp.addWidget(self.p1); rp.addWidget(SelectableLabel("->")); rp.addWidget(self.p2)
         self.ck_rs = QCheckBox("改後綴"); self.s1 = QLineEdit(); self.s2 = QLineEdit(); rs = QHBoxLayout(); rs.addWidget(self.s1); rs.addWidget(SelectableLabel("->")); rs.addWidget(self.s2)
